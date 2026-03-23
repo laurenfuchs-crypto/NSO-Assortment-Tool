@@ -13,7 +13,7 @@
 <body class="bg-gray-50">
   <div id="root"></div>
   <script type="text/babel">
-    const { useState, useMemo, useCallback, useRef, Fragment } = React;
+    const { useState, useEffect, useMemo, useCallback, useRef, Fragment } = React;
 
     // ============================================
     // MULTI-SELECT FILTER COMPONENT
@@ -2829,24 +2829,143 @@
     };
 
     // ============================================
-    // STORAGE HELPERS (localStorage for standalone HTML)
+    // STORAGE HELPERS (Google Sheets API backend)
     // ============================================
 
-    const STORAGE_KEY = 'faherty_nso_projects';
+    const SETTINGS_KEY = 'faherty_nso_settings';
 
-    const loadAllProjects = () => {
+    const getSettings = () => {
       try {
-        const raw = localStorage.getItem(STORAGE_KEY);
+        return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
+      } catch { return {}; }
+    };
+
+    const saveSettings = (settings) => {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    };
+
+    // Google Sheets API helpers
+    const sheetsAPI = {
+      baseUrl: 'https://sheets.googleapis.com/v4/spreadsheets',
+
+      async read(sheetId, apiKey, range) {
+        const url = `${this.baseUrl}/${sheetId}/values/${encodeURIComponent(range)}?key=${apiKey}`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`Sheets read failed: ${res.status} ${res.statusText}`);
+        const data = await res.json();
+        return data.values || [];
+      },
+
+      async write(sheetId, apiKey, range, values) {
+        const url = `${this.baseUrl}/${sheetId}/values/${encodeURIComponent(range)}?valueInputOption=RAW&key=${apiKey}`;
+        const res = await fetch(url, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ range, values }),
+        });
+        if (!res.ok) {
+          const errText = await res.text();
+          throw new Error(`Sheets write failed: ${res.status} — ${errText}`);
+        }
+        return await res.json();
+      },
+
+      async append(sheetId, apiKey, range, values) {
+        const url = `${this.baseUrl}/${sheetId}/values/${encodeURIComponent(range)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS&key=${apiKey}`;
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ range, values }),
+        });
+        if (!res.ok) throw new Error(`Sheets append failed: ${res.status}`);
+        return await res.json();
+      },
+
+      async clearRow(sheetId, apiKey, range) {
+        const url = `${this.baseUrl}/${sheetId}/values/${encodeURIComponent(range)}:clear?key=${apiKey}`;
+        const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+        if (!res.ok) throw new Error(`Sheets clear failed: ${res.status}`);
+      },
+    };
+
+    // NOTE: Google Sheets API with just an API key is READ-ONLY for public sheets.
+    // For read+write, we need OAuth or a service account.
+    // Simplest approach: use Google Apps Script as a proxy (no OAuth needed by end users).
+    // The tool will try Apps Script first, fall back to direct API for reads.
+
+    // Apps Script Web App proxy — handles all writes
+    let appsScriptUrl = '';
+
+    const sheetsStorage = {
+      async loadAll() {
+        const { sheetId, apiKey, scriptUrl } = getSettings();
+        if (!sheetId || !apiKey) return [];
+        try {
+          const rows = await sheetsAPI.read(sheetId, apiKey, 'projects!A:F');
+          if (rows.length <= 1) return []; // only header row
+          return rows.slice(1).map(row => {
+            try {
+              return {
+                id: row[0] || '',
+                storeName: row[1] || '',
+                status: row[2] || '',
+                createdAt: row[3] || '',
+                updatedAt: row[4] || '',
+                appData: row[5] ? JSON.parse(row[5]) : makeBlankAppData(),
+              };
+            } catch { return null; }
+          }).filter(Boolean);
+        } catch (e) {
+          console.error('Failed to load from Sheets:', e);
+          return [];
+        }
+      },
+
+      async save(projectId, appData) {
+        const { sheetId, apiKey, scriptUrl } = getSettings();
+        if (!sheetId || !scriptUrl) throw new Error('Not connected');
+        const storeName = appData.proFormaData?.newStoreName || 'Unnamed Store';
+        const now = new Date().toISOString();
+        const status = getProjectStatus(appData);
+        const payload = {
+          action: 'save',
+          sheetId,
+          projectId,
+          rowData: [projectId, storeName, status, '', now, JSON.stringify(appData)],
+        };
+        const res = await fetch(scriptUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) throw new Error('Save failed: ' + res.status);
+        return await res.json();
+      },
+
+      async delete(projectId) {
+        const { sheetId, scriptUrl } = getSettings();
+        if (!sheetId || !scriptUrl) throw new Error('Not connected');
+        const res = await fetch(scriptUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({ action: 'delete', sheetId, projectId }),
+        });
+        if (!res.ok) throw new Error('Delete failed');
+      },
+    };
+
+    // Backward-compatible sync wrappers (used by Dashboard + App)
+    // These work with both localStorage (offline) and Sheets (online)
+    const loadAllProjects = () => {
+      // Return cached data synchronously for initial render
+      try {
+        const raw = localStorage.getItem('faherty_nso_cache');
         return raw ? JSON.parse(raw) : [];
       } catch { return []; }
     };
 
     const saveAllProjects = (projects) => {
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
-      } catch (e) {
-        console.error('Storage save failed:', e);
-      }
+      try { localStorage.setItem('faherty_nso_cache', JSON.stringify(projects)); } catch {}
     };
 
     const saveProject = (projectId, appData) => {
@@ -2854,30 +2973,31 @@
       const storeName = appData.proFormaData?.newStoreName || 'Unnamed Store';
       const now = new Date().toISOString();
       const idx = projects.findIndex(p => p.id === projectId);
-
-      // Build a saveable copy (strip very large data to manage storage limits)
-      // PST data can be huge (1800+ rows) — we save it but warn if storage is tight
       const saveData = {
         id: projectId,
-        storeName: storeName,
+        storeName,
         status: getProjectStatus(appData),
         createdAt: idx >= 0 ? projects[idx].createdAt : now,
         updatedAt: now,
-        appData: appData,
+        appData,
       };
-
-      if (idx >= 0) {
-        projects[idx] = saveData;
-      } else {
-        projects.push(saveData);
-      }
+      if (idx >= 0) { projects[idx] = saveData; } else { projects.push(saveData); }
       saveAllProjects(projects);
+      // Also save to Sheets async (fire and forget)
+      const { scriptUrl } = getSettings();
+      if (scriptUrl) {
+        sheetsStorage.save(projectId, appData).catch(e => console.error('Sheets save error:', e));
+      }
       return saveData;
     };
 
     const deleteProject = (projectId) => {
       const projects = loadAllProjects().filter(p => p.id !== projectId);
       saveAllProjects(projects);
+      const { scriptUrl } = getSettings();
+      if (scriptUrl) {
+        sheetsStorage.delete(projectId).catch(e => console.error('Sheets delete error:', e));
+      }
     };
 
     const getProjectStatus = (appData) => {
@@ -3238,11 +3358,34 @@
     // ============================================
 
     const App = () => {
-      const [view, setView] = useState('dashboard'); // 'dashboard' or 'project'
+      const [view, setView] = useState('dashboard'); // 'dashboard', 'project', 'settings'
       const [activeProjectId, setActiveProjectId] = useState(null);
       const [currentStep, setCurrentStep] = useState(1);
-      const [saveStatus, setSaveStatus] = useState(''); // '', 'saving', 'saved'
+      const [saveStatus, setSaveStatus] = useState('');
       const [appData, setAppData] = useState(makeBlankAppData());
+      const [isConnected, setIsConnected] = useState(!!getSettings().sheetId);
+      const [syncStatus, setSyncStatus] = useState('');
+
+      // Sync from Sheets on mount and when returning to dashboard
+      const syncFromSheets = useCallback(async () => {
+        const settings = getSettings();
+        if (!settings.sheetId || !settings.apiKey) return;
+        setSyncStatus('syncing');
+        try {
+          const projects = await sheetsStorage.loadAll();
+          if (projects.length > 0) {
+            saveAllProjects(projects);
+          }
+          setSyncStatus('synced');
+          setTimeout(() => setSyncStatus(''), 2000);
+        } catch (e) {
+          console.error('Sync failed:', e);
+          setSyncStatus('error');
+          setTimeout(() => setSyncStatus(''), 3000);
+        }
+      }, []);
+
+      useEffect(() => { syncFromSheets(); }, []);
 
       const handleOpenProject = (projectId) => {
         const projects = loadAllProjects();
@@ -3265,12 +3408,10 @@
       };
 
       const handleBackToDashboard = () => {
-        // Auto-save before going back
-        if (activeProjectId) {
-          doSave();
-        }
+        if (activeProjectId) { doSave(); }
         setView('dashboard');
         setActiveProjectId(null);
+        syncFromSheets();
       };
 
       const doSave = useCallback(() => {
@@ -3316,9 +3457,85 @@
         return false;
       };
 
+      // Settings panel
+      const SettingsPanel = () => {
+        const [settings, setLocalSettings] = useState(getSettings());
+        const [testStatus, setTestStatus] = useState('');
+
+        const handleTest = async () => {
+          setTestStatus('testing');
+          try {
+            const rows = await sheetsAPI.read(settings.sheetId, settings.apiKey, 'projects!A1:A1');
+            setTestStatus('success');
+            saveSettings(settings);
+            setIsConnected(true);
+            setTimeout(() => setTestStatus(''), 3000);
+          } catch (e) {
+            setTestStatus('error: ' + e.message);
+          }
+        };
+
+        return (
+          <div className="min-h-screen bg-gray-100 flex items-center justify-center p-8">
+            <div className="bg-white rounded-xl shadow-lg p-8 w-full max-w-lg">
+              <h2 className="text-xl font-bold text-gray-800 mb-2">Connect to Google Sheets</h2>
+              <p className="text-sm text-gray-500 mb-6">Enter your Google Sheet ID and API Key to enable real-time shared data.</p>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Google Sheet ID</label>
+                  <input type="text" value={settings.sheetId || ''} onChange={(e) => setLocalSettings({ ...settings, sheetId: e.target.value.trim() })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" placeholder="From the sheet URL: /d/THIS_PART/edit" />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Google Cloud API Key</label>
+                  <input type="text" value={settings.apiKey || ''} onChange={(e) => setLocalSettings({ ...settings, apiKey: e.target.value.trim() })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" placeholder="AIza..." />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Apps Script Web App URL</label>
+                  <input type="text" value={settings.scriptUrl || ''} onChange={(e) => setLocalSettings({ ...settings, scriptUrl: e.target.value.trim() })} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" placeholder="https://script.google.com/macros/s/.../exec" />
+                  <p className="text-xs text-gray-400 mt-1">Required for saving. See setup guide for instructions.</p>
+                </div>
+
+                <div className="flex items-center gap-3 pt-2">
+                  <button onClick={handleTest} className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700">Test Connection</button>
+                  <button onClick={() => { saveSettings(settings); setView('dashboard'); syncFromSheets(); }} className="px-5 py-2 bg-gray-200 text-gray-700 rounded-lg text-sm font-semibold hover:bg-gray-300">Save & Close</button>
+                </div>
+
+                {testStatus === 'testing' && <p className="text-sm text-blue-600">Testing connection...</p>}
+                {testStatus === 'success' && <p className="text-sm text-green-600 font-semibold">Connected successfully!</p>}
+                {testStatus.startsWith('error') && <p className="text-sm text-red-600">{testStatus}</p>}
+              </div>
+
+              <div className="mt-6 pt-4 border-t border-gray-200">
+                <button onClick={() => setView('dashboard')} className="text-sm text-gray-500 hover:text-gray-700">Skip for now (use local storage only)</button>
+              </div>
+            </div>
+          </div>
+        );
+      };
+
       // Dashboard view
+      if (view === 'settings') {
+        return <SettingsPanel />;
+      }
+
       if (view === 'dashboard') {
-        return <Dashboard onOpenProject={handleOpenProject} onNewProject={handleNewProject} />;
+        return (
+          <Fragment>
+            <Dashboard onOpenProject={handleOpenProject} onNewProject={handleNewProject} />
+            {/* Connection status bar */}
+            <div className="fixed bottom-0 left-0 right-0 bg-gray-900 text-white px-4 py-2 flex items-center justify-between text-xs z-50">
+              <div className="flex items-center gap-3">
+                <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-400' : 'bg-yellow-400'}`}></span>
+                <span>{isConnected ? 'Connected to Google Sheets' : 'Local storage only'}</span>
+                {syncStatus === 'syncing' && <span className="text-blue-300">Syncing...</span>}
+                {syncStatus === 'synced' && <span className="text-green-300">Synced</span>}
+                {syncStatus === 'error' && <span className="text-red-300">Sync failed</span>}
+              </div>
+              <button onClick={() => setView('settings')} className="px-3 py-1 bg-gray-700 rounded text-xs hover:bg-gray-600">Settings</button>
+            </div>
+          </Fragment>
+        );
       }
 
       // Project view
