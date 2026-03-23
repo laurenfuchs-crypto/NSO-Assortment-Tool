@@ -1,0 +1,3424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Faherty NSO Assortment Tool</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50">
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useMemo, useCallback, useRef, Fragment } = React;
+
+    // ============================================
+    // MULTI-SELECT FILTER COMPONENT
+    // ============================================
+
+    const MultiSelectFilter = ({ options, selected, onChange, placeholder }) => {
+      const [open, setOpen] = useState(false);
+      const [search, setSearch] = useState('');
+      const ref = useRef(null);
+
+      // Close dropdown when clicking outside
+      React.useEffect(() => {
+        const handleClick = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+        document.addEventListener('mousedown', handleClick);
+        return () => document.removeEventListener('mousedown', handleClick);
+      }, []);
+
+      const filtered = options.filter(o => !search || String(o).toLowerCase().includes(search.toLowerCase()));
+      const selectedSet = new Set(selected || []);
+      const hasSelection = selectedSet.size > 0;
+
+      const toggle = (val) => {
+        const next = new Set(selectedSet);
+        if (next.has(val)) next.delete(val); else next.add(val);
+        onChange(Array.from(next));
+      };
+
+      const selectAll = () => onChange(filtered.map(String));
+      const clearAll = () => onChange([]);
+
+      return (
+        <div ref={ref} className="relative" style={{minWidth: '60px'}}>
+          <button
+            onClick={() => setOpen(!open)}
+            className={`w-full px-1 py-0.5 border rounded text-xs text-left truncate ${hasSelection ? 'border-blue-400 bg-blue-50 text-blue-700 font-semibold' : 'border-gray-200 bg-white text-gray-500'}`}
+            title={hasSelection ? selected.join(', ') : 'All'}
+          >
+            {hasSelection ? (selected.length === 1 ? selected[0] : selected.length + ' selected') : 'All'}
+          </button>
+          {open && (
+            <div className="absolute z-50 mt-1 bg-white border border-gray-300 rounded-lg shadow-lg" style={{minWidth: '180px', maxHeight: '280px'}}>
+              <div className="p-1.5 border-b border-gray-200">
+                <input
+                  type="text"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder={'Search...'}
+                  className="w-full px-2 py-1 border border-gray-200 rounded text-xs"
+                  autoFocus
+                />
+              </div>
+              <div className="px-1.5 py-1 border-b border-gray-100 flex gap-1">
+                <button onClick={selectAll} className="text-xs text-blue-600 hover:underline">All</button>
+                <span className="text-gray-300">|</span>
+                <button onClick={clearAll} className="text-xs text-red-500 hover:underline">Clear</button>
+              </div>
+              <div className="overflow-y-auto" style={{maxHeight: '200px'}}>
+                {filtered.length === 0 ? (
+                  <div className="px-2 py-2 text-xs text-gray-400">No matches</div>
+                ) : filtered.map(opt => (
+                  <label key={opt} className="flex items-center px-2 py-1 hover:bg-gray-50 cursor-pointer">
+                    <input type="checkbox" checked={selectedSet.has(opt)} onChange={() => toggle(opt)} className="w-3 h-3 mr-2" />
+                    <span className="text-xs truncate">{opt}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    };
+
+    // ============================================
+    // UTILITY FUNCTIONS
+    // ============================================
+
+    // Format a value as a rounded whole number with commas
+    // Handles: numbers (8500.75), currency strings ("$2,500,000.50"), percentages ("45.2%"), or plain strings
+    const fmtNum = (val) => {
+      if (val === undefined || val === null || val === '') return '';
+      const str = String(val).trim();
+      // Strip $, commas, spaces for parsing
+      const cleaned = str.replace(/[$,\s]/g, '');
+      // Check if it's a percentage — leave as-is but round
+      if (str.includes('%')) {
+        const num = parseFloat(cleaned);
+        if (!isNaN(num)) return Math.round(num) + '%';
+        return str;
+      }
+      const num = parseFloat(cleaned);
+      if (isNaN(num)) return str;
+      // Round and add commas
+      return Math.round(num).toLocaleString('en-US');
+    };
+
+    const parseProForma = (fileData) => {
+      try {
+        const workbook = XLSX.read(fileData, { type: 'array' });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+        const result = {
+          newStoreName: '',
+          newStoreOpenDate: '',
+          newStoreRegion: '',
+          newStoreArea: '',
+          newStoreVibe: '',
+          newStoreGrossSqft: '',
+          newStoreSellingSquareFeet: '',
+          newStoreRent: '',
+          newStoreNetSales: '',
+          newStoreGM: '',
+          newStoreEBITDA: '',
+          newStoreTraffic: '',
+          newStoreCVR: '',
+          newStoreAOV: '',
+          newStoreSalesPerSqft: '',
+          newStorePayback: '',
+          compStoreName: '',
+          compStoreOpenDate: '',
+          compStoreRegion: '',
+          compStoreArea: '',
+          compStoreGrossSqft: '',
+          compStoreSellingSquareFeet: '',
+          compStoreRent: '',
+          compStoreNetSales: '',
+          compStoreGM: '',
+          compStoreEBITDA: '',
+          compStoreTraffic: '',
+          compStoreCVR: '',
+          compStoreAOV: '',
+          compStoreSalesPerSqft: '',
+          compStorePayback: '',
+          compStoreAnalysis: [],
+          divMix: {},
+        };
+
+        // The Pro Forma has a side-by-side layout:
+        // LEFT side = Comp Store data, RIGHT side = New Store data
+        // Labels repeat in each half, with empty cells as spacing.
+        // Example row: [empty, empty, "Open Date", empty, "9/15/21", empty, "Open Date", "5/2/26"]
+        // We need to find the label and grab the next NON-EMPTY value after it.
+        // For new store data, we look for the SECOND occurrence of the label (right half).
+        // For comp data, we use the FIRST occurrence.
+
+        const findNextNonEmpty = (row, startIdx) => {
+          for (let k = startIdx; k < row.length; k++) {
+            if (row[k] !== undefined && row[k] !== null && String(row[k]).trim() !== '') {
+              return row[k];
+            }
+          }
+          return '';
+        };
+
+        // Find the comparison section — the row where "Comp Store" and "New Store" appear together
+        let compSectionStart = 0;
+        for (let i = 0; i < Math.min(20, jsonData.length); i++) {
+          const row = jsonData[i];
+          if (!Array.isArray(row)) continue;
+          const rowStr = row.map(c => String(c || '').toLowerCase()).join('|');
+          if (rowStr.includes('comp store') && rowStr.includes('new store')) {
+            compSectionStart = i;
+            break;
+          }
+        }
+
+        // Search within the comparison section (skips summary rows at top).
+        // side='comp' → first occurrence in a row (left side, value typically in col 4)
+        // side='new' → second occurrence in a row (right side, value typically in col 7)
+        const findValue = (label, side = 'comp') => {
+          const lbl = label.toLowerCase();
+          for (let i = compSectionStart; i < jsonData.length; i++) {
+            const row = jsonData[i];
+            if (!Array.isArray(row)) continue;
+            const positions = [];
+            for (let j = 0; j < row.length; j++) {
+              if (row[j] && String(row[j]).toLowerCase().includes(lbl)) {
+                positions.push(j);
+              }
+            }
+            if (positions.length === 0) continue;
+            if (side === 'comp') {
+              return findNextNonEmpty(row, positions[0] + 1);
+            } else {
+              const pos = positions.length >= 2 ? positions[1] : positions[0];
+              return findNextNonEmpty(row, pos + 1);
+            }
+          }
+          return '';
+        };
+
+        // Find new store name — looks for pattern like "The Gardens (Palm Beach Gardens,FL)"
+        const findNewStoreName = () => {
+          for (let i = 0; i < Math.min(30, jsonData.length); i++) {
+            const row = jsonData[i];
+            if (!Array.isArray(row)) continue;
+            for (let j = 0; j < row.length; j++) {
+              const cell = row[j];
+              if (cell && String(cell).includes('(') && String(cell).includes(',') && String(cell).includes(')')) {
+                return String(cell);
+              }
+            }
+          }
+          return '';
+        };
+
+        // Find comp store name — it's in the row right after "Comp Store" label, same column area
+        const findCompName = () => {
+          for (let i = 0; i < Math.min(30, jsonData.length); i++) {
+            const row = jsonData[i];
+            if (!Array.isArray(row)) continue;
+            for (let j = 0; j < row.length; j++) {
+              if (row[j] && String(row[j]).toLowerCase() === 'comp store') {
+                // The comp store NAME is in the next row, same column position area
+                // OR it could be the next non-empty cell to the right
+                // Check if next cell has the name
+                const nextVal = findNextNonEmpty(row, j + 1);
+                if (nextVal && !String(nextVal).toLowerCase().includes('new store') && !String(nextVal).toLowerCase().includes('net sales')) {
+                  return nextVal;
+                }
+                // Otherwise check the row below in the same column area
+                if (i + 1 < jsonData.length) {
+                  const nextRow = jsonData[i + 1];
+                  if (Array.isArray(nextRow)) {
+                    const val = findNextNonEmpty(nextRow, j);
+                    if (val) return val;
+                  }
+                }
+              }
+            }
+          }
+          // Fallback: look for the "Comp Store" header row where name is directly below
+          return findValue('comp store', 1);
+        };
+
+        result.newStoreName = findNewStoreName();
+        result.compStoreName = findCompName();
+
+        // Helper to convert Excel date serial numbers or date strings to YYYY-MM-DD
+        const toDateStr = (val) => {
+          if (!val) return '';
+          // If it's a number (Excel serial date), convert it
+          if (typeof val === 'number') {
+            const excelEpoch = new Date(1899, 11, 30);
+            const date = new Date(excelEpoch.getTime() + val * 86400000);
+            return date.toISOString().split('T')[0];
+          }
+          // If it's already a string like "9/15/21" or "5/2/26", parse it
+          const str = String(val).trim();
+          const parts = str.split('/');
+          if (parts.length === 3) {
+            let [m, d, y] = parts.map(Number);
+            if (y < 100) y += y < 50 ? 2000 : 1900;
+            return y + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+          }
+          return str;
+        };
+
+        // Helper to convert to display format MM/DD/YYYY
+        const toDisplayDate = (val) => {
+          if (!val) return '';
+          if (typeof val === 'number') {
+            const excelEpoch = new Date(1899, 11, 30);
+            const date = new Date(excelEpoch.getTime() + val * 86400000);
+            return (date.getMonth() + 1) + '/' + date.getDate() + '/' + date.getFullYear();
+          }
+          const str = String(val).trim();
+          const parts = str.split('/');
+          if (parts.length === 3) {
+            let [m, d, y] = parts.map(Number);
+            if (y < 100) y += y < 50 ? 2000 : 1900;
+            return m + '/' + d + '/' + y;
+          }
+          // Try YYYY-MM-DD format
+          const isoParts = str.split('-');
+          if (isoParts.length === 3 && isoParts[0].length === 4) {
+            return parseInt(isoParts[1]) + '/' + parseInt(isoParts[2]) + '/' + isoParts[0];
+          }
+          return str;
+        };
+
+        // Comp = left side of comparison, New = right side
+        result.compStoreOpenDate = toDisplayDate(findValue('Open Date', 'comp'));
+        result.newStoreOpenDate = toDateStr(findValue('Open Date', 'new'));
+        result.compStoreRegion = findValue('Region', 'comp');
+        result.newStoreRegion = findValue('Region', 'new');
+        result.compStoreArea = findValue('Type', 'comp');
+        result.newStoreArea = findValue('Type', 'new');
+        result.compStoreGrossSqft = findValue('Gross Sq. Ft.', 'comp');
+        result.newStoreGrossSqft = findValue('Gross Sq. Ft.', 'new');
+        result.compStoreSellingSquareFeet = findValue('Selling Sq. Ft.', 'comp');
+        result.newStoreSellingSquareFeet = findValue('Selling Sq. Ft.', 'new');
+        result.compStoreRent = findValue('Avg. Annual Rent', 'comp');
+        result.newStoreRent = findValue('Avg. Annual Rent', 'new');
+        result.compStoreNetSales = findValue('Net Sales', 'comp');
+        result.newStoreNetSales = findValue('Net Sales', 'new');
+        result.compStoreGM = findValue('Gross Margin', 'comp');
+        result.newStoreGM = findValue('Gross Margin', 'new');
+        result.compStoreEBITDA = findValue('Adj. EBITDA', 'comp');
+        result.newStoreEBITDA = findValue('Adj. EBITDA', 'new');
+        result.compStoreTraffic = findValue('Traffic', 'comp');
+        result.newStoreTraffic = findValue('Traffic', 'new');
+        result.compStoreCVR = findValue('CVR', 'comp');
+        result.newStoreCVR = findValue('CVR', 'new');
+        result.compStoreAOV = findValue('Net AOV', 'comp');
+        result.newStoreAOV = findValue('Net AOV', 'new');
+        result.compStoreSalesPerSqft = findValue('Sales per Selling', 'comp');
+        result.newStoreSalesPerSqft = findValue('Sales per Selling', 'new');
+        result.compStorePayback = findValue('Payback Period', 'comp');
+        result.newStorePayback = findValue('Payback Period', 'new');
+
+        // Find the Comp Store Analysis section
+        // In the Pro Forma, the analysis table has a "Comp Store Analysis" label,
+        // then a header row with column names, then data rows.
+        // The table is indented (data starts around column 2).
+        let compAnalysisStartRow = -1;
+        for (let i = 0; i < jsonData.length; i++) {
+          const row = jsonData[i];
+          if (!Array.isArray(row)) continue;
+          for (let j = 0; j < row.length; j++) {
+            if (row[j] && String(row[j]).toLowerCase().includes('comp store analysis')) {
+              compAnalysisStartRow = i;
+              break;
+            }
+          }
+          if (compAnalysisStartRow >= 0) break;
+        }
+
+        if (compAnalysisStartRow >= 0) {
+          // Find the header row (contains "Comp Store" and "Open" and "Region")
+          let headerRow = -1;
+          let dataCol = 2; // data typically starts at column 2 due to indentation
+          for (let i = compAnalysisStartRow; i < Math.min(compAnalysisStartRow + 10, jsonData.length); i++) {
+            const row = jsonData[i];
+            if (!Array.isArray(row)) continue;
+            const rowStr = row.join(' ').toLowerCase();
+            if (rowStr.includes('comp store') && rowStr.includes('open') && (rowStr.includes('region') || rowStr.includes('date'))) {
+              headerRow = i;
+              // Find which column has "Comp Store"
+              for (let j = 0; j < row.length; j++) {
+                if (row[j] && String(row[j]).toLowerCase().includes('comp store')) {
+                  dataCol = j;
+                  break;
+                }
+              }
+              break;
+            }
+          }
+
+          if (headerRow >= 0) {
+            // Parse data rows starting after the header
+            for (let i = headerRow + 1; i < jsonData.length; i++) {
+              const row = jsonData[i];
+              if (!Array.isArray(row)) break;
+              const storeName = row[dataCol];
+              if (!storeName || String(storeName).trim() === '') {
+                // Check if it's the "Comp Group Median" row
+                const nextVal = findNextNonEmpty(row, dataCol);
+                if (nextVal && String(nextVal).toLowerCase().includes('median')) {
+                  continue;
+                }
+                break;
+              }
+              const d = dataCol; // shorthand
+              result.compStoreAnalysis.push({
+                compStore: row[d] || '',
+                openDate: row[d+1] || '',
+                region: row[d+2] || '',
+                type: row[d+3] || '',
+                grossSqft: row[d+4] || '',
+                sellingSqft: row[d+5] || '',
+                grossCapex: row[d+6] || '',
+                ta: row[d+7] || '',
+                netCapex: row[d+8] || '',
+                netPerGrossSqft: row[d+9] || '',
+                paybackMonths: row[d+10] || '',
+                traffic: row[d+11] || '',
+                cvr: row[d+12] || '',
+                aov: row[d+13] || '',
+                netSales: row[d+14] || '',
+                gmPercent: row[d+15] || '',
+                compPercNS: row[d+16] || '',
+                rentPercNS: row[d+17] || '',
+                adjEBITDA: row[d+18] || '',
+                ebitdaPercent: row[d+19] || '',
+              });
+            }
+          }
+        }
+
+        return result;
+      } catch (error) {
+        console.error('Error parsing Pro Forma:', error);
+        return {
+          newStoreName: '',
+          newStoreOpenDate: '',
+          newStoreRegion: '',
+          newStoreArea: '',
+          newStoreVibe: '',
+          newStoreGrossSqft: '',
+          newStoreSellingSquareFeet: '',
+          newStoreRent: '',
+          newStoreNetSales: '',
+          newStoreGM: '',
+          newStoreEBITDA: '',
+          newStoreTraffic: '',
+          newStoreCVR: '',
+          newStoreAOV: '',
+          newStoreSalesPerSqft: '',
+          newStorePayback: '',
+          compStoreName: '',
+          compStoreOpenDate: '',
+          compStoreRegion: '',
+          compStoreArea: '',
+          compStoreGrossSqft: '',
+          compStoreSellingSquareFeet: '',
+          compStoreRent: '',
+          compStoreNetSales: '',
+          compStoreGM: '',
+          compStoreEBITDA: '',
+          compStoreTraffic: '',
+          compStoreCVR: '',
+          compStoreAOV: '',
+          compStoreSalesPerSqft: '',
+          compStorePayback: '',
+          compStoreAnalysis: [],
+          divMix: {},
+        };
+      }
+    };
+
+    const parseStoreTieringTool = (fileData) => {
+      try {
+        const workbook = XLSX.read(fileData, { type: 'array' });
+        const result = {
+          allStores: [],
+          mensData: [],
+          womensData: [],
+          nonApparel: [],
+          kidsData: [],
+          storeGroups: [],
+          storeMatrix: {},
+          totalRollup: [],
+        };
+
+        // Parse Attributes Upload
+        if (workbook.SheetNames.includes('Attributes Upload')) {
+          const sheet = workbook.Sheets['Attributes Upload'];
+          const data = XLSX.utils.sheet_to_json(sheet);
+          const uniqueStores = new Set();
+          data.forEach(row => {
+            if (row['Location Name']) {
+              uniqueStores.add(row['Location Name']);
+            }
+          });
+          result.allStores = Array.from(uniqueStores);
+        }
+
+        // Parse division sheets — these have a complex layout:
+        // Rows 1-10ish: title, index weights, tier thresholds, chain averages
+        // Then a header row with: Store | Region | Area | Vibe | Comp Type | Sim Store | SqFt | Net Sales TY | ... | Proposed Tier | Override Tier | ...
+        // Then data rows with actual store tiering data.
+        // We need to find the header row first, then parse data below it.
+        const divisionMap = {
+          'Mens': 'mensData',
+          'Womens': 'womensData',
+          'Non Apparel': 'nonApparel',
+          'Kids': 'kidsData',
+        };
+
+        Object.entries(divisionMap).forEach(([sheetName, resultKey]) => {
+          if (workbook.SheetNames.includes(sheetName)) {
+            const sheet = workbook.Sheets[sheetName];
+            const rawData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+            // Find the header row — it contains "Store" and "Region" and "Proposed Tier"
+            let headerRowIdx = -1;
+            for (let i = 0; i < Math.min(20, rawData.length); i++) {
+              const row = rawData[i];
+              if (!Array.isArray(row)) continue;
+              const rowStr = row.map(c => String(c || '').toLowerCase()).join('|');
+              if (rowStr.includes('store') && rowStr.includes('region') && (rowStr.includes('proposed tier') || rowStr.includes('composite'))) {
+                headerRowIdx = i;
+                break;
+              }
+            }
+
+            if (headerRowIdx >= 0) {
+              const headers = rawData[headerRowIdx].map(h => String(h || '').trim());
+              const parsed = [];
+              for (let i = headerRowIdx + 1; i < rawData.length; i++) {
+                const row = rawData[i];
+                if (!Array.isArray(row) || !row[0] || String(row[0]).trim() === '') continue;
+                // Skip summary rows like "Comp Group Median"
+                if (String(row[0]).toLowerCase().includes('median') || String(row[0]).toLowerCase().includes('total')) continue;
+                const obj = {};
+                headers.forEach((h, j) => {
+                  if (h) obj[h] = row[j] !== undefined ? row[j] : '';
+                });
+                parsed.push(obj);
+              }
+              result[resultKey] = parsed;
+            }
+          }
+        });
+
+        // Parse Store Matrix — try multiple possible sheet names
+        const matrixSheetNames = ['Store Matrix', 'StoreMatrix', 'Store_Matrix', 'Matrix', 'Store Groups', 'StoreGroups'];
+        let matrixSheetName = null;
+        for (const name of matrixSheetNames) {
+          if (workbook.SheetNames.includes(name)) {
+            matrixSheetName = name;
+            break;
+          }
+        }
+        // Also check for any sheet name containing "matrix" (case-insensitive)
+        if (!matrixSheetName) {
+          matrixSheetName = workbook.SheetNames.find(s => s.toLowerCase().includes('matrix'));
+        }
+
+        if (matrixSheetName) {
+          const sheet = workbook.Sheets[matrixSheetName];
+          const rawData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+          if (rawData.length > 0) {
+            // Find the header row — it should have a store name column and group name columns
+            // The first column with store names, remaining columns are group names with X marks
+            let headerRowIdx = 0;
+            let storeColIdx = 0;
+
+            // Scan first few rows to find the one that looks like a header (has multiple text values)
+            for (let i = 0; i < Math.min(5, rawData.length); i++) {
+              const row = rawData[i];
+              if (!Array.isArray(row)) continue;
+              const nonEmptyCells = row.filter(c => c !== undefined && c !== null && String(c).trim() !== '');
+              if (nonEmptyCells.length >= 3) {
+                headerRowIdx = i;
+                // Find which column has the first header text (store column)
+                for (let j = 0; j < row.length; j++) {
+                  if (row[j] !== undefined && row[j] !== null && String(row[j]).trim() !== '') {
+                    storeColIdx = j;
+                    break;
+                  }
+                }
+                break;
+              }
+            }
+
+            const headers = rawData[headerRowIdx];
+            // Group names are all columns after the store name column
+            const groupNames = [];
+            for (let j = storeColIdx + 1; j < headers.length; j++) {
+              if (headers[j] && String(headers[j]).trim() !== '') {
+                groupNames.push(String(headers[j]).trim());
+              }
+            }
+            result.storeGroups = groupNames;
+
+            // Parse each store row
+            for (let i = headerRowIdx + 1; i < rawData.length; i++) {
+              const row = rawData[i];
+              if (!Array.isArray(row)) continue;
+              const storeName = row[storeColIdx];
+              if (!storeName || String(storeName).trim() === '') continue;
+              const storeKey = String(storeName).trim();
+              const groups = [];
+              for (let j = storeColIdx + 1; j < row.length; j++) {
+                const cell = row[j];
+                const groupIdx = j - (storeColIdx + 1);
+                if (cell && String(cell).toUpperCase().trim() === 'X' && groupIdx < groupNames.length) {
+                  groups.push(groupNames[groupIdx]);
+                }
+              }
+              result.storeMatrix[storeKey] = groups;
+            }
+          }
+        }
+
+        // Parse Total Rollup
+        if (workbook.SheetNames.includes('Total Rollup')) {
+          const sheet = workbook.Sheets['Total Rollup'];
+          const data = XLSX.utils.sheet_to_json(sheet);
+          result.totalRollup = data;
+        }
+
+        return result;
+      } catch (error) {
+        console.error('Error parsing Store Tiering Tool:', error);
+        return {
+          allStores: [],
+          mensData: [],
+          womensData: [],
+          nonApparel: [],
+          kidsData: [],
+          storeGroups: [],
+          storeMatrix: {},
+          totalRollup: [],
+        };
+      }
+    };
+
+    const parsePST = (fileData) => {
+      try {
+        const workbook = XLSX.read(fileData, { type: 'array' });
+        // Try "PST" sheet first, fallback to first sheet
+        const sheetName = workbook.SheetNames.includes('PST') ? 'PST' : workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        const rawData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+        // Find the actual header row — look for "Year" and "SKU" and "Department"
+        let headerIdx = 3; // default to row 4 (0-indexed 3)
+        for (let i = 0; i < Math.min(10, rawData.length); i++) {
+          const row = rawData[i];
+          if (!Array.isArray(row)) continue;
+          const rowStr = row.map(c => String(c || '').toLowerCase()).join('|');
+          if (rowStr.includes('year') && rowStr.includes('sku') && rowStr.includes('department')) {
+            headerIdx = i;
+            break;
+          }
+        }
+
+        // Map header names to column indices
+        const headers = rawData[headerIdx] || [];
+        const colMap = {};
+        headers.forEach((h, idx) => {
+          if (h) colMap[String(h).trim()] = idx;
+        });
+
+        // Helper to get column index by partial name match
+        const getCol = (partialName) => {
+          const lower = partialName.toLowerCase();
+          const key = Object.keys(colMap).find(k => k.toLowerCase().includes(lower));
+          return key ? colMap[key] : -1;
+        };
+
+        const cYear = getCol('Year');
+        const cSeason = getCol('Season Code');
+        const cDept = getCol('Department');
+        const cSKU = getCol('SKU');
+        const cCat = getCol('Category');
+        const cSubcat = getCol('Subcategory');
+        const cStyle = getCol('Style') >= 0 ? getCol('Style') : -1;
+        // "Style" might match "Style Description" too, so be more specific
+        const cStyleIdx = Object.keys(colMap).findIndex(k => k === 'Style');
+        const cStyleDescIdx = Object.keys(colMap).findIndex(k => k === 'Style Description');
+        const cStyleCol = cStyleIdx >= 0 ? colMap['Style'] : getCol('Style');
+        const cStyleDesc = colMap['Style Description'] !== undefined ? colMap['Style Description'] : getCol('Style Desc');
+        const cColorCode = getCol('Color Code');
+        const cColorDesc = getCol('Color Description');
+        const cCommit = getCol('Commit Coding');
+        const cRollRetail = colMap['Roll Out Code - Retail'] !== undefined ? colMap['Roll Out Code - Retail'] : getCol('Roll Out Code');
+        const cRollOnline = colMap['Roll Out Code - Online'] !== undefined ? colMap['Roll Out Code - Online'] : -1;
+        const cDelivery = getCol('Delivery Month');
+        const cLifeCycle = getCol('Seasonal Life Cycle');
+        const cStoreTier = getCol('Store Tier');
+        const cStoreCount = getCol('Store Count');
+        const cAIR = getCol('AIR');
+        const cAUC = getCol('AUC');
+        const cSizeScale = getCol('Size Scale');
+        const cMSRP = colMap['MSRP'] !== undefined ? colMap['MSRP'] : -1;
+        const cMDExitWeek = colMap['Final MD Exit Week'] !== undefined ? colMap['Final MD Exit Week'] : getCol('MD Exit Week');
+
+        const pstData = [];
+        for (let i = headerIdx + 1; i < rawData.length; i++) {
+          const row = rawData[i];
+          if (!Array.isArray(row)) continue;
+          // Skip rows without a SKU or Department
+          const sku = cSKU >= 0 ? row[cSKU] : '';
+          const dept = cDept >= 0 ? row[cDept] : '';
+          if (!sku && !dept) continue;
+
+          pstData.push({
+            year: cYear >= 0 ? (row[cYear] || '') : '',
+            seasonCode: cSeason >= 0 ? (row[cSeason] || '') : '',
+            department: dept || '',
+            sku: sku || '',
+            category: cCat >= 0 ? (row[cCat] || '') : '',
+            subcategory: cSubcat >= 0 ? (row[cSubcat] || '') : '',
+            style: cStyleCol >= 0 ? (row[cStyleCol] || '') : '',
+            styleDescription: cStyleDesc >= 0 ? (row[cStyleDesc] || '') : '',
+            colorCode: cColorCode >= 0 ? (row[cColorCode] || '') : '',
+            colorDescription: cColorDesc >= 0 ? (row[cColorDesc] || '') : '',
+            commitCoding: cCommit >= 0 ? (row[cCommit] || '') : '',
+            rollOutCodeRetail: cRollRetail >= 0 ? (row[cRollRetail] || '') : '',
+            rollOutCodeOnline: cRollOnline >= 0 ? (row[cRollOnline] || '') : '',
+            deliveryMonth: cDelivery >= 0 ? (row[cDelivery] || '') : '',
+            seasonalLifeCycle: cLifeCycle >= 0 ? (row[cLifeCycle] || '') : '',
+            storeTier: cStoreTier >= 0 ? (row[cStoreTier] || '') : '',
+            storeCount: cStoreCount >= 0 ? (row[cStoreCount] || '') : '',
+            air: cAIR >= 0 ? (row[cAIR] || '') : '',
+            auc: cAUC >= 0 ? (row[cAUC] || '') : '',
+            sizeScale: cSizeScale >= 0 ? (row[cSizeScale] || '') : '',
+            msrp: cMSRP >= 0 ? (row[cMSRP] || '') : '',
+            mdExitWeek: cMDExitWeek >= 0 ? (row[cMDExitWeek] || '') : '',
+          });
+        }
+
+        return pstData;
+      } catch (error) {
+        console.error('Error parsing PST:', error);
+        return [];
+      }
+    };
+
+    // ============================================
+    // STEP 1: STORE SETUP & FINANCIAL TOPLINE
+    // ============================================
+
+    const Step1 = ({ onNext, onDataChange, data }) => {
+      const fileInputRef = useRef(null);
+
+      const handleFileUpload = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          try {
+            const parsed = parseProForma(new Uint8Array(event.target.result));
+            // Default the Sim Store to the primary comp store from the Pro Forma
+            const defaultSimStore = String(parsed.compStoreName || '').trim();
+            onDataChange({ ...data, proFormaData: parsed, simStore: defaultSimStore, step1Complete: true });
+          } catch (error) {
+            alert('Error parsing Pro Forma file: ' + error.message);
+          }
+        };
+        reader.readAsArrayBuffer(file);
+      };
+
+      const handleFieldChange = (field, value) => {
+        onDataChange({
+          ...data,
+          proFormaData: { ...data.proFormaData, [field]: value },
+        });
+      };
+
+      const handleAddCompStore = () => {
+        const newComp = {
+          compStore: '',
+          openDate: '',
+          region: '',
+          type: '',
+          vibe: '',
+          grossSqft: '',
+          sellingSqft: '',
+          grossCapex: '',
+          ta: '',
+          netCapex: '',
+          netPerGrossSqft: '',
+          paybackMonths: '',
+          traffic: '',
+          cvr: '',
+          aov: '',
+          netSales: '',
+          gmPercent: '',
+          compPercNS: '',
+          rentPercNS: '',
+          adjEBITDA: '',
+          ebitdaPercent: '',
+        };
+        onDataChange({
+          ...data,
+          proFormaData: { ...data.proFormaData, compStoreAnalysis: [...(data.proFormaData.compStoreAnalysis || []), newComp] },
+        });
+      };
+
+      const handleCompAnalysisChange = (index, field, value) => {
+        const updated = [...data.proFormaData.compStoreAnalysis];
+        updated[index] = { ...updated[index], [field]: value };
+        onDataChange({
+          ...data,
+          proFormaData: { ...data.proFormaData, compStoreAnalysis: updated },
+        });
+      };
+
+      return (
+        <div className="space-y-8">
+          <div>
+            <h2 className="text-2xl font-bold text-gray-800 mb-6">Step 1: Store Setup & Financial Topline</h2>
+
+            <div className="mb-8">
+              <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer hover:border-gray-400 transition"
+                onClick={() => fileInputRef.current?.click()}>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".xlsx,.xlsm"
+                  onChange={handleFileUpload}
+                  className="hidden"
+                />
+                <div className="text-lg font-semibold text-gray-700">Upload Pro Forma (.xlsx/.xlsm)</div>
+                <p className="text-sm text-gray-500 mt-2">Click or drag Pro Forma file</p>
+              </div>
+            </div>
+
+            {/* Add Comp Store button */}
+            <div className="flex justify-end mb-4">
+              <button
+                onClick={handleAddCompStore}
+                className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-semibold hover:bg-blue-700"
+              >
+                + Add Comp Store
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {/* New Store Card */}
+              <div className="bg-white rounded-lg shadow-md p-4 border-l-4 border-blue-500">
+                <h3 className="text-sm font-bold text-blue-700 mb-3">New Store</h3>
+                <div className="space-y-2">
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-600">Store Name</label>
+                    <input type="text" value={data.proFormaData.newStoreName} onChange={(e) => handleFieldChange('newStoreName', e.target.value)} className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-600">Open Date</label>
+                    <input type="date" value={data.proFormaData.newStoreOpenDate} onChange={(e) => handleFieldChange('newStoreOpenDate', e.target.value)} className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-600">Region</label>
+                    <input type="text" value={data.proFormaData.newStoreRegion} onChange={(e) => handleFieldChange('newStoreRegion', e.target.value)} className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-600">Area</label>
+                    <input type="text" value={data.proFormaData.newStoreArea} onChange={(e) => handleFieldChange('newStoreArea', e.target.value)} className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-600">Vibe</label>
+                    <input type="text" value={data.proFormaData.newStoreVibe || ''} onChange={(e) => handleFieldChange('newStoreVibe', e.target.value)} className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs" placeholder="e.g. Beach, Mountain, NYC" />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600">Gross Sq. Ft.</label>
+                      <input type="text" value={fmtNum(data.proFormaData.newStoreGrossSqft)} onChange={(e) => handleFieldChange('newStoreGrossSqft', e.target.value)} className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600">Selling Sq. Ft.</label>
+                      <input type="text" value={fmtNum(data.proFormaData.newStoreSellingSquareFeet)} onChange={(e) => handleFieldChange('newStoreSellingSquareFeet', e.target.value)} className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs" />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600">Net Sales</label>
+                      <input type="text" value={fmtNum(data.proFormaData.newStoreNetSales)} onChange={(e) => handleFieldChange('newStoreNetSales', e.target.value)} className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600">Sales/Sq. Ft.</label>
+                      <div className="w-full px-2 py-1.5 border border-gray-200 rounded text-xs bg-gray-50 text-gray-700 font-semibold">
+                        {(() => {
+                          const sales = parseFloat(String(data.proFormaData.newStoreNetSales || '').replace(/[$,\s]/g, '')) || 0;
+                          const sqft = parseFloat(String(data.proFormaData.newStoreSellingSquareFeet || '').replace(/[$,\s]/g, '')) || 0;
+                          return sqft > 0 && sales > 0 ? fmtNum(Math.round(sales / sqft)) : '—';
+                        })()}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Primary Comp Store Card */}
+              {(() => {
+                const isPrimarySim = (data.simStore || '') === String(data.proFormaData.compStoreName || '').trim();
+                return (
+                  <div className={`bg-white rounded-lg shadow-md p-4 border-l-4 ${isPrimarySim ? 'border-blue-500' : 'border-green-500'}`}>
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-3">
+                        <h3 className="text-lg font-bold text-green-700">Comp Store</h3>
+                        <span className="text-xs text-gray-400">(from Pro Forma)</span>
+                      </div>
+                      <label className={`flex items-center gap-2 cursor-pointer px-3 py-1.5 rounded-full text-xs font-semibold transition ${isPrimarySim ? 'bg-blue-100 text-blue-700 border border-blue-300' : 'bg-gray-100 text-gray-500 border border-gray-200 hover:bg-blue-50 hover:text-blue-600'}`}>
+                        <input type="radio" name="simStore" checked={isPrimarySim} onChange={() => onDataChange({ ...data, simStore: String(data.proFormaData.compStoreName).trim() })} className="w-3 h-3 text-blue-600 cursor-pointer" />
+                        {isPrimarySim ? 'Sim Store' : 'Set as Sim'}
+                      </label>
+                    </div>
+                    <div className="space-y-2">
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-600">Store Name</label>
+                        <input type="text" value={data.proFormaData.compStoreName} onChange={(e) => handleFieldChange('compStoreName', e.target.value)} className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-600">Open Date</label>
+                        <input type="text" value={(() => { const v = data.proFormaData.compStoreOpenDate || ''; const iso = String(v).match(/^(\d{4})-(\d{2})-(\d{2})$/); if (iso) return parseInt(iso[2]) + '/' + parseInt(iso[3]) + '/' + iso[1]; return v; })()} onChange={(e) => handleFieldChange('compStoreOpenDate', e.target.value)} className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs" placeholder="MM/DD/YYYY" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-600">Region</label>
+                        <input type="text" value={data.proFormaData.compStoreRegion} onChange={(e) => handleFieldChange('compStoreRegion', e.target.value)} className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-600">Area</label>
+                        <input type="text" value={data.proFormaData.compStoreArea} onChange={(e) => handleFieldChange('compStoreArea', e.target.value)} className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-600">Vibe</label>
+                        <input type="text" value={data.proFormaData.compStoreVibe || ''} onChange={(e) => handleFieldChange('compStoreVibe', e.target.value)} className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs" placeholder="e.g. Beach, Mountain, NYC" />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-600">Gross Sq. Ft.</label>
+                          <input type="text" value={fmtNum(data.proFormaData.compStoreGrossSqft)} onChange={(e) => handleFieldChange('compStoreGrossSqft', e.target.value)} className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs" />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-600">Selling Sq. Ft.</label>
+                          <input type="text" value={fmtNum(data.proFormaData.compStoreSellingSquareFeet)} onChange={(e) => handleFieldChange('compStoreSellingSquareFeet', e.target.value)} className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs" />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-600">Net Sales</label>
+                          <input type="text" value={fmtNum(data.proFormaData.compStoreNetSales)} onChange={(e) => handleFieldChange('compStoreNetSales', e.target.value)} className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs" />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-600">Sales/Sq. Ft.</label>
+                          <div className="w-full px-2 py-1.5 border border-gray-200 rounded text-xs bg-gray-50 text-gray-700 font-semibold">
+                            {(() => {
+                              const sales = parseFloat(String(data.proFormaData.compStoreNetSales || '').replace(/[$,\s]/g, '')) || 0;
+                              const sqft = parseFloat(String(data.proFormaData.compStoreSellingSquareFeet || '').replace(/[$,\s]/g, '')) || 0;
+                              return sqft > 0 && sales > 0 ? fmtNum(Math.round(sales / sqft)) : '—';
+                            })()}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Additional Comp Store Cards — same grid, flow right next to the others */}
+              {(data.proFormaData.compStoreAnalysis || []).map((comp, idx) => {
+                const storeName = String(comp.compStore || '').trim();
+                if (storeName && storeName === String(data.proFormaData.compStoreName || '').trim()) return null;
+                const isSimStore = storeName && (data.simStore || '') === storeName;
+
+                return (
+                  <div key={idx} className={`bg-white rounded-lg shadow-md p-4 border-l-4 ${isSimStore ? 'border-blue-500' : 'border-gray-300'}`}>
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-3">
+                        <h3 className="text-sm font-bold text-gray-700">Comp Store {idx + 2}</h3>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <label className={`flex items-center gap-1.5 cursor-pointer px-2 py-1 rounded-full text-xs font-semibold transition ${isSimStore ? 'bg-blue-100 text-blue-700 border border-blue-300' : 'bg-gray-100 text-gray-500 border border-gray-200 hover:bg-blue-50 hover:text-blue-600'}`}>
+                          <input type="radio" name="simStore" checked={isSimStore} onChange={() => onDataChange({ ...data, simStore: storeName })} className="w-3 h-3 text-blue-600 cursor-pointer" />
+                          {isSimStore ? 'Sim' : 'Set Sim'}
+                        </label>
+                        <button onClick={() => { const updated = (data.proFormaData.compStoreAnalysis || []).filter((_, i) => i !== idx); onDataChange({ ...data, proFormaData: { ...data.proFormaData, compStoreAnalysis: updated } }); }} className="text-red-400 hover:text-red-600 text-xs px-1.5 py-1 rounded hover:bg-red-50" title="Remove">✕</button>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-600">Store Name</label>
+                        <input type="text" value={comp.compStore || ''} onChange={(e) => handleCompAnalysisChange(idx, 'compStore', e.target.value)} className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-600">Open Date</label>
+                        <input type="text" value={comp.openDate || ''} onChange={(e) => handleCompAnalysisChange(idx, 'openDate', e.target.value)} className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs" placeholder="MM/DD/YYYY" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-600">Region</label>
+                        <input type="text" value={comp.region || ''} onChange={(e) => handleCompAnalysisChange(idx, 'region', e.target.value)} className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-600">Area</label>
+                        <input type="text" value={comp.type || ''} onChange={(e) => handleCompAnalysisChange(idx, 'type', e.target.value)} className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-600">Vibe</label>
+                        <input type="text" value={comp.vibe || ''} onChange={(e) => handleCompAnalysisChange(idx, 'vibe', e.target.value)} className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs" placeholder="e.g. Beach, Mountain" />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-600">Gross Sq. Ft.</label>
+                          <input type="text" value={fmtNum(comp.grossSqft)} onChange={(e) => handleCompAnalysisChange(idx, 'grossSqft', e.target.value)} className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs" />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-600">Selling Sq. Ft.</label>
+                          <input type="text" value={fmtNum(comp.sellingSqft)} onChange={(e) => handleCompAnalysisChange(idx, 'sellingSqft', e.target.value)} className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs" />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-600">Net Sales</label>
+                          <input type="text" value={fmtNum(comp.netSales)} onChange={(e) => handleCompAnalysisChange(idx, 'netSales', e.target.value)} className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs" />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-600">Sales/Sq. Ft.</label>
+                          <div className="w-full px-2 py-1.5 border border-gray-200 rounded text-xs bg-gray-50 text-gray-700 font-semibold">
+                            {(() => {
+                              const sales = parseFloat(String(comp.netSales || '').replace(/[$,\s]/g, '')) || 0;
+                              const sqft = parseFloat(String(comp.sellingSqft || '').replace(/[$,\s]/g, '')) || 0;
+                              return sqft > 0 && sales > 0 ? fmtNum(Math.round(sales / sqft)) : '—';
+                            })()}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {data.simStore && (
+              <div className="mt-4 p-2 bg-blue-50 border border-blue-200 rounded text-sm text-blue-800">
+                Sim Store: <strong>{data.simStore}</strong> — this store will be used as the reference for store group assignments in Step 2.
+              </div>
+            )}
+
+            {/* Divisional % Contribution */}
+            <div className="mt-8 bg-white rounded-lg shadow-md p-6">
+              <h3 className="text-lg font-bold text-gray-800 mb-2">Divisional % Contribution</h3>
+              <p className="text-sm text-gray-500 mb-4">Enter the % mix by division for each store.</p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm border-collapse">
+                  <thead>
+                    <tr className="bg-gray-100 border-b-2 border-gray-300">
+                      <th className="px-4 py-2 text-left text-xs font-bold text-gray-700" style={{width:'130px'}}>Division</th>
+                      <th className="px-4 py-2 text-center text-xs font-bold text-blue-700 bg-blue-50" style={{width:'120px'}}>{data.proFormaData.newStoreName || 'New Store'}</th>
+                      {data.proFormaData.compStoreName && (
+                        <th className="px-4 py-2 text-center text-xs font-bold text-green-700 bg-green-50" style={{width:'120px'}}>{data.proFormaData.compStoreName}</th>
+                      )}
+                      {(data.proFormaData.compStoreAnalysis || []).map((comp, idx) => {
+                        const name = String(comp.compStore || '').trim();
+                        if (!name || name === String(data.proFormaData.compStoreName || '').trim()) return null;
+                        return <th key={idx} className="px-4 py-2 text-center text-xs font-bold text-gray-700" style={{width:'120px'}}>{name}</th>;
+                      })}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[
+                      { key: 'mens', label: 'Mens' },
+                      { key: 'womens', label: 'Womens' },
+                      { key: 'nonApparel', label: 'Non Apparel' },
+                      { key: 'kids', label: 'Kids' },
+                    ].map(div => {
+                      const divMix = data.proFormaData.divMix || {};
+                      const compName = String(data.proFormaData.compStoreName || '').trim();
+                      const additionalStores = (data.proFormaData.compStoreAnalysis || [])
+                        .map(c => String(c.compStore || '').trim())
+                        .filter(n => n && n !== compName);
+
+                      return (
+                        <tr key={div.key} className="border-b border-gray-200 hover:bg-gray-50">
+                          <td className="px-4 py-2 font-semibold text-gray-800">{div.label}</td>
+                          {/* New Store */}
+                          <td className="px-3 py-1.5 bg-blue-50">
+                            <input
+                              type="text"
+                              value={(divMix['__new__'] || {})[div.key] || ''}
+                              onChange={(e) => {
+                                const updated = { ...divMix, '__new__': { ...(divMix['__new__'] || {}), [div.key]: e.target.value } };
+                                onDataChange({ ...data, proFormaData: { ...data.proFormaData, divMix: updated } });
+                              }}
+                              className="w-full px-2 py-1 border border-gray-300 rounded text-xs text-center"
+                              placeholder="%"
+                            />
+                          </td>
+                          {/* Primary Comp Store */}
+                          {compName && (
+                            <td className="px-3 py-1.5 bg-green-50">
+                              <input
+                                type="text"
+                                value={(divMix[compName] || {})[div.key] || ''}
+                                onChange={(e) => {
+                                  const updated = { ...divMix, [compName]: { ...(divMix[compName] || {}), [div.key]: e.target.value } };
+                                  onDataChange({ ...data, proFormaData: { ...data.proFormaData, divMix: updated } });
+                                }}
+                                className="w-full px-2 py-1 border border-gray-300 rounded text-xs text-center"
+                                placeholder="%"
+                              />
+                            </td>
+                          )}
+                          {/* Additional Comp Stores */}
+                          {additionalStores.map((storeName, idx) => (
+                            <td key={idx} className="px-3 py-1.5">
+                              <input
+                                type="text"
+                                value={(divMix[storeName] || {})[div.key] || ''}
+                                onChange={(e) => {
+                                  const updated = { ...divMix, [storeName]: { ...(divMix[storeName] || {}), [div.key]: e.target.value } };
+                                  onDataChange({ ...data, proFormaData: { ...data.proFormaData, divMix: updated } });
+                                }}
+                                className="w-full px-2 py-1 border border-gray-300 rounded text-xs text-center"
+                                placeholder="%"
+                              />
+                            </td>
+                          ))}
+                        </tr>
+                      );
+                    })}
+                    {/* Total Row */}
+                    {(() => {
+                      const divMix = data.proFormaData.divMix || {};
+                      const compName = String(data.proFormaData.compStoreName || '').trim();
+                      const additionalStores = (data.proFormaData.compStoreAnalysis || [])
+                        .map(c => String(c.compStore || '').trim())
+                        .filter(n => n && n !== compName);
+                      const sumPct = (storeKey) => {
+                        const mix = divMix[storeKey] || {};
+                        return ['mens','womens','nonApparel','kids']
+                          .map(k => parseFloat(String(mix[k] || '0').replace(/[%]/g, '')) || 0)
+                          .reduce((s, v) => s + v, 0);
+                      };
+                      const newTotal = sumPct('__new__');
+                      const compTotal = compName ? sumPct(compName) : null;
+                      return (
+                        <tr className="bg-gray-800 text-white font-bold border-t-2 border-gray-600">
+                          <td className="px-4 py-2">TOTAL</td>
+                          <td className={`px-4 py-2 text-center ${newTotal !== 100 && newTotal > 0 ? 'text-yellow-300' : ''}`}>{newTotal > 0 ? newTotal + '%' : '—'}</td>
+                          {compName && <td className={`px-4 py-2 text-center ${compTotal !== 100 && compTotal > 0 ? 'text-yellow-300' : ''}`}>{compTotal > 0 ? compTotal + '%' : '—'}</td>}
+                          {additionalStores.map((storeName, idx) => {
+                            const t = sumPct(storeName);
+                            return <td key={idx} className={`px-4 py-2 text-center ${t !== 100 && t > 0 ? 'text-yellow-300' : ''}`}>{t > 0 ? t + '%' : '—'}</td>;
+                          })}
+                        </tr>
+                      );
+                    })()}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex justify-between pt-8 border-t border-gray-200">
+            <button disabled className="px-6 py-2 bg-gray-300 text-gray-600 rounded-md font-semibold cursor-not-allowed">
+              Previous
+            </button>
+            <button
+              onClick={() => onNext(2)}
+              className="px-6 py-2 bg-blue-600 text-white rounded-md font-semibold hover:bg-blue-700"
+            >
+              Next: Store Tiering
+            </button>
+          </div>
+        </div>
+      );
+    };
+
+    // ============================================
+    // STEP 2: STORE TIERING & GROUPS
+    // ============================================
+
+    const Step2 = ({ onNext, onPrev, onDataChange, data }) => {
+      const fileInputRef = useRef(null);
+
+      const handleFileUpload = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          try {
+            const parsed = parseStoreTieringTool(new Uint8Array(event.target.result));
+
+            // Auto-populate selectedGroups from Store Matrix
+            // Priority: New Store first → if not found, fall back to Sim Store
+            let autoGroups = [];
+            const simStoreName = (data.simStore || '').trim();
+            const newStoreName = (data.proFormaData.newStoreName || '').trim();
+
+            const matrixKeys = Object.keys(parsed.storeMatrix);
+            const findStore = (name) => {
+              if (!name) return null;
+              const lower = name.toLowerCase();
+              return matrixKeys.find(k =>
+                k.toLowerCase() === lower ||
+                lower.includes(k.toLowerCase()) ||
+                k.toLowerCase().includes(lower.split('(')[0].trim().toLowerCase())
+              );
+            };
+
+            // Try new store first — if it's already in the matrix, use its groups
+            let matchedStore = findStore(newStoreName);
+            let matchSource = 'new store (' + newStoreName + ')';
+
+            // If new store isn't in the matrix, fall back to Sim Store
+            if (!matchedStore && simStoreName) {
+              matchedStore = findStore(simStoreName);
+              matchSource = 'Sim Store fallback (' + simStoreName + ')';
+            }
+
+            if (matchedStore) {
+              autoGroups = parsed.storeMatrix[matchedStore] || [];
+            }
+
+            onDataChange({
+              ...data,
+              storeTieringData: parsed,
+              selectedGroups: autoGroups.length > 0 ? autoGroups : (data.selectedGroups || []),
+              storeMatrixMatch: matchedStore ? { store: matchedStore, source: matchSource } : null,
+              assignedTiers: (() => {
+                // Helper: get store name from a tiering row (handles different header names)
+                const getStoreName = (r) => {
+                  for (const k of Object.keys(r)) {
+                    if (k.toLowerCase().includes('store') || k.toLowerCase().includes('location')) {
+                      return String(r[k] || '').trim().toLowerCase();
+                    }
+                  }
+                  return String(Object.values(r)[0] || '').trim().toLowerCase();
+                };
+
+                // Helper: get effective tier from a tiering row (handles different header names)
+                const getTier = (match) => {
+                  if (!match) return '';
+                  for (const k of Object.keys(match)) {
+                    if (k.toLowerCase().includes('override') && k.toLowerCase().includes('tier')) {
+                      const v = String(match[k] || '').trim();
+                      if (v) return v;
+                    }
+                  }
+                  for (const k of Object.keys(match)) {
+                    if (k.toLowerCase().includes('proposed') && k.toLowerCase().includes('tier')) {
+                      const v = String(match[k] || '').trim();
+                      if (v) return v;
+                    }
+                  }
+                  return '';
+                };
+
+                // Helper: find a store in division data and return its tier
+                const findTierForStore = (name, divData) => {
+                  if (!name || !Array.isArray(divData) || divData.length === 0) return '';
+                  const lower = name.toLowerCase();
+                  const match = divData.find(r => {
+                    const s = getStoreName(r);
+                    return s === lower || s.includes(lower) || lower.includes(s);
+                  });
+                  return getTier(match);
+                };
+
+                // Priority: try new store name first, fall back to sim store
+                const newName = newStoreName;
+                const simName = simStoreName;
+
+                const getTierWithFallback = (divData) => {
+                  const fromNew = findTierForStore(newName, divData);
+                  if (fromNew) return fromNew;
+                  return findTierForStore(simName, divData);
+                };
+
+                return {
+                  mens: getTierWithFallback(parsed.mensData),
+                  womens: getTierWithFallback(parsed.womensData),
+                  nonApparel: getTierWithFallback(parsed.nonApparel),
+                  kids: getTierWithFallback(parsed.kidsData),
+                };
+              })(),
+              step2Complete: true,
+            });
+          } catch (error) {
+            alert('Error parsing Store Tiering Tool: ' + error.message);
+          }
+        };
+        reader.readAsArrayBuffer(file);
+      };
+
+      const handleGroupToggle = (group) => {
+        const currentGroups = data.selectedGroups || [];
+        const updated = currentGroups.includes(group)
+          ? currentGroups.filter(g => g !== group)
+          : [...currentGroups, group];
+        onDataChange({ ...data, selectedGroups: updated });
+      };
+
+      // Helper to get a store's effective tier — Override Tier takes precedence over Proposed Tier
+      const getEffectiveTier = (row) => {
+        const override = row['Override Tier'];
+        if (override && String(override).trim() !== '') return String(override).trim();
+        const proposed = row['Proposed Tier'];
+        if (proposed && String(proposed).trim() !== '') return String(proposed).trim();
+        return '';
+      };
+
+      const countTiers = (divData) => {
+        const arr = divData || [];
+        return {
+          tier1: arr.filter(d => getEffectiveTier(d) === 'Tier 1').length,
+          tier2: arr.filter(d => getEffectiveTier(d) === 'Tier 2').length,
+          tier3: arr.filter(d => getEffectiveTier(d) === 'Tier 3').length,
+          inspo: arr.filter(d => getEffectiveTier(d) === 'Inspo').length,
+          total: arr.length,
+        };
+      };
+
+      const tierCounts = useMemo(() => {
+        return {
+          mens: countTiers(data.storeTieringData.mensData),
+          womens: countTiers(data.storeTieringData.womensData),
+          nonApparel: countTiers(data.storeTieringData.nonApparel),
+          kids: countTiers(data.storeTieringData.kidsData),
+        };
+      }, [data.storeTieringData]);
+
+      // Default store groups to show when no Store Matrix sheet exists
+      const defaultGroups = [
+        'ALL STORES', 'ALL MINUS COOL CLIMATE', 'ALL MINUS HOT', 'BEACH', 'BEACH & INSPO',
+        'COLD DOORS', 'COLDEST', 'FOOTWEAR DOORS', 'HOT', 'INSPO', 'KIDS DOORS',
+        'MOUNTAIN', 'MOUNTAIN + REDWOOD', 'WARM DOORS', 'WARM + HOT',
+        'MENS TIER 2+', 'MENS TIER 3+', 'WOMENS TIER 2+', 'WOMENS TIER 3+',
+        'TREND', 'TOP AUR DOORS', 'BLANKET DOORS', 'ONLINE ONLY',
+      ];
+
+      const availableGroups = useMemo(() => {
+        const matrixGroups = data.storeTieringData.storeGroups || [];
+        return matrixGroups.length > 0 ? matrixGroups : defaultGroups;
+      }, [data.storeTieringData.storeGroups]);
+
+      return (
+        <div className="space-y-8">
+          <h2 className="text-2xl font-bold text-gray-800">Step 2: Store Tiering & Groups</h2>
+
+          <div className="mb-8">
+            <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer hover:border-gray-400 transition"
+              onClick={() => fileInputRef.current?.click()}>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".xlsx"
+                onChange={handleFileUpload}
+                className="hidden"
+              />
+              <div className="text-lg font-semibold text-gray-700">Upload Store Tiering Tool (.xlsx)</div>
+              <p className="text-sm text-gray-500 mt-2">Click or drag Store Tiering Tool file</p>
+            </div>
+          </div>
+
+          {/* Tier Assignments — New Store vs Comp Stores */}
+          <div className="bg-white rounded-lg shadow-md p-6">
+            <h3 className="text-lg font-bold text-gray-800 mb-4">Division Tier Assignments</h3>
+            <p className="text-sm text-gray-500 mb-4">Comp store tiers are pulled from the uploaded Store Tiering Tool. Assign tiers for the new store.</p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm border-collapse">
+                <thead>
+                  <tr className="bg-gray-100 border-b-2 border-gray-300">
+                    <th className="px-4 py-2 text-left text-xs font-bold text-gray-700" style={{width:'130px'}}>Division</th>
+                    <th className="px-4 py-2 text-center text-xs font-bold text-blue-700 bg-blue-50">{data.proFormaData?.newStoreName || 'New Store'}</th>
+                    {data.proFormaData?.compStoreName && (
+                      <th className="px-4 py-2 text-center text-xs font-bold text-green-700 bg-green-50">{data.proFormaData.compStoreName}</th>
+                    )}
+                    {(data.proFormaData?.compStoreAnalysis || []).map((comp, idx) => {
+                      const name = String(comp.compStore || '').trim();
+                      if (!name || name === String(data.proFormaData?.compStoreName || '').trim()) return null;
+                      return <th key={idx} className="px-4 py-2 text-center text-xs font-bold text-gray-700">{name}</th>;
+                    })}
+                  </tr>
+                </thead>
+                <tbody>
+                  {[
+                    { key: 'mens', label: 'Mens', dataKey: 'mensData' },
+                    { key: 'womens', label: 'Womens', dataKey: 'womensData' },
+                    { key: 'nonApparel', label: 'Non Apparel', dataKey: 'nonApparel' },
+                    { key: 'kids', label: 'Kids', dataKey: 'kidsData' },
+                  ].map(div => {
+                    // Lookup comp store tier from tiering data
+                    const lookupTier = (storeName, divData) => {
+                      if (!storeName || !Array.isArray(divData) || divData.length === 0) return '—';
+                      const lower = storeName.toLowerCase();
+                      const match = divData.find(r => {
+                        let s = '';
+                        for (const k of Object.keys(r)) {
+                          if (k.toLowerCase().includes('store') || k.toLowerCase().includes('location')) {
+                            s = String(r[k] || '').trim().toLowerCase();
+                            break;
+                          }
+                        }
+                        if (!s) s = String(Object.values(r)[0] || '').trim().toLowerCase();
+                        return s === lower || s.includes(lower) || lower.includes(s);
+                      });
+                      if (!match) return '—';
+                      for (const k of Object.keys(match)) {
+                        if (k.toLowerCase().includes('override') && k.toLowerCase().includes('tier')) {
+                          const v = String(match[k] || '').trim();
+                          if (v) return v;
+                        }
+                      }
+                      for (const k of Object.keys(match)) {
+                        if (k.toLowerCase().includes('proposed') && k.toLowerCase().includes('tier')) {
+                          const v = String(match[k] || '').trim();
+                          if (v) return v;
+                        }
+                      }
+                      return '—';
+                    };
+
+                    const td = data.storeTieringData || {};
+                    const compName = String(data.proFormaData?.compStoreName || '').trim();
+                    const compTier = lookupTier(compName, td[div.dataKey]);
+
+                    return (
+                      <tr key={div.key} className="border-b border-gray-200 hover:bg-gray-50">
+                        <td className="px-4 py-2 font-semibold text-gray-800">{div.label}</td>
+                        {/* New Store — dropdown */}
+                        <td className="px-3 py-1.5 bg-blue-50">
+                          <select
+                            value={(data.assignedTiers || {})[div.key] || ''}
+                            onChange={(e) => onDataChange({ ...data, assignedTiers: { ...(data.assignedTiers || {}), [div.key]: e.target.value } })}
+                            className="w-full px-2 py-1 border border-gray-300 rounded text-xs text-center"
+                          >
+                            <option value="">-- Select --</option>
+                            <option value="Tier 1">Tier 1</option>
+                            <option value="Tier 2">Tier 2</option>
+                            <option value="Tier 3">Tier 3</option>
+                            <option value="Inspo">Inspo</option>
+                          </select>
+                        </td>
+                        {/* Primary Comp Store — read-only from tiering data */}
+                        {compName && (
+                          <td className="px-4 py-2 text-center bg-green-50 font-semibold text-gray-700 text-xs">{compTier}</td>
+                        )}
+                        {/* Additional Comp Stores */}
+                        {(data.proFormaData?.compStoreAnalysis || []).map((comp, idx) => {
+                          const name = String(comp.compStore || '').trim();
+                          if (!name || name === compName) return null;
+                          const tier = lookupTier(name, td[div.dataKey]);
+                          return <td key={idx} className="px-4 py-2 text-center font-semibold text-gray-700 text-xs">{tier}</td>;
+                        })}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Store Groups */}
+          <div className="bg-white rounded-lg shadow-md p-6">
+            <h3 className="text-lg font-bold text-gray-800 mb-4">Store Groups (Select applicable groups for new store)</h3>
+            {data.storeMatrixMatch ? (
+              <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-md">
+                <p className="text-sm text-green-800">
+                  {data.storeMatrixMatch.source.includes('fallback') ? (
+                    <span>New store not found in Store Matrix. Groups pre-populated from <strong>{data.storeMatrixMatch.source}</strong>: "{data.storeMatrixMatch.store}"</span>
+                  ) : (
+                    <span>Groups pre-populated from Store Matrix for <strong>{data.storeMatrixMatch.store}</strong></span>
+                  )}
+                  {(data.selectedGroups || []).length > 0 && (
+                    <span> — {(data.selectedGroups || []).length} group(s) selected</span>
+                  )}
+                </p>
+              </div>
+            ) : data.storeTieringData.storeGroups && data.storeTieringData.storeGroups.length > 0 ? (
+              <p className="text-sm text-yellow-700 mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
+                Store Matrix loaded but neither the new store nor the Sim Store was found. Select groups manually.
+              </p>
+            ) : (
+              <p className="text-sm text-gray-500 mb-4">
+                No Store Matrix sheet found — showing default groups. Add a "Store Matrix" tab to your Store Tiering Tool to auto-populate.
+              </p>
+            )}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {availableGroups.map((group, idx) => (
+                <label key={idx} className="flex items-center space-x-3 cursor-pointer p-2 rounded hover:bg-gray-50">
+                  <input
+                    type="checkbox"
+                    checked={(data.selectedGroups || []).includes(group)}
+                    onChange={() => handleGroupToggle(group)}
+                    className="w-4 h-4 text-blue-600 border-gray-300 rounded cursor-pointer"
+                  />
+                  <span className="text-sm text-gray-700">{group}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex justify-between pt-8 border-t border-gray-200">
+            <button
+              onClick={() => onPrev(1)}
+              className="px-6 py-2 bg-gray-400 text-white rounded-md font-semibold hover:bg-gray-500"
+            >
+              Previous
+            </button>
+            <button
+              onClick={() => onNext(3)}
+              className="px-6 py-2 bg-blue-600 text-white rounded-md font-semibold hover:bg-blue-700"
+            >
+              Next: Deliveries
+            </button>
+          </div>
+        </div>
+      );
+    };
+
+    // ============================================
+    // STEP 3: DELIVERY SELECTION
+    // ============================================
+
+    const Step3 = ({ onNext, onPrev, onDataChange, data }) => {
+      const fileInputRef = useRef(null);
+
+      const handleFileUpload = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          try {
+            const parsed = parsePST(new Uint8Array(event.target.result));
+
+            // Auto-select delivery months based on Opening Asst Qtr
+            // Season → base months mapping (Faherty fiscal)
+            const seasonMonths = {
+              'Spring': ['february', 'march', 'april'],
+              'Summer': ['may', 'june', 'july'],
+              'Fall': ['august', 'september', 'october'],
+              'Holiday': ['november', 'december', 'january'],
+            };
+
+            // Determine Opening Asst Qtr from opening date
+            const openDateStr = data.proFormaData?.newStoreOpenDate || '';
+            let asstQtr = '';
+            if (openDateStr) {
+              const d = (() => {
+                const s = String(openDateStr).trim();
+                if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return new Date(s + 'T12:00:00');
+                const parts = s.split('/');
+                if (parts.length === 3) { let [m,dd,y] = parts.map(Number); if (y<100) y+=y<50?2000:1900; return new Date(y,m-1,dd); }
+                return null;
+              })();
+              if (d) {
+                const m = d.getMonth();
+                if (m >= 1 && m <= 3) asstQtr = 'Spring';
+                else if (m >= 4 && m <= 6) asstQtr = 'Summer';
+                else if (m >= 7 && m <= 9) asstQtr = 'Fall';
+                else asstQtr = 'Holiday';
+              }
+            }
+
+            // Find all delivery months from PST that match the season
+            let autoSelectedDeliveries = [];
+            if (asstQtr && seasonMonths[asstQtr]) {
+              const baseMonths = seasonMonths[asstQtr];
+              const allDeliveryMonths = [...new Set(parsed.map(r => String(r.deliveryMonth || '').trim()).filter(Boolean))];
+              autoSelectedDeliveries = allDeliveryMonths.filter(dm => {
+                // Strip _2, _3 etc. to get base month, then lowercase compare
+                const base = dm.replace(/_\d+$/, '').toLowerCase();
+                return baseMonths.includes(base);
+              });
+            }
+
+            onDataChange({
+              ...data,
+              pstData: parsed,
+              selectedDeliveries: autoSelectedDeliveries.length > 0 ? autoSelectedDeliveries : (data.selectedDeliveries || []),
+              step3Complete: true,
+            });
+          } catch (error) {
+            alert('Error parsing PST: ' + error.message);
+          }
+        };
+        reader.readAsArrayBuffer(file);
+      };
+
+      // Build season → delivery month mapping from actual PST data
+      const seasonData = useMemo(() => {
+        const seasons = {};
+        (data.pstData || []).forEach(row => {
+          const season = String(row.seasonCode || '').trim();
+          const deliveryMonth = String(row.deliveryMonth || '').trim();
+          if (!season || !deliveryMonth) return;
+
+          if (!seasons[season]) {
+            seasons[season] = { deliveries: {}, totalSKUs: 0 };
+          }
+          seasons[season].totalSKUs++;
+
+          if (!seasons[season].deliveries[deliveryMonth]) {
+            seasons[season].deliveries[deliveryMonth] = { skuCount: 0, categories: new Set() };
+          }
+          seasons[season].deliveries[deliveryMonth].skuCount++;
+          if (row.category) seasons[season].deliveries[deliveryMonth].categories.add(row.category);
+        });
+
+        // Sort deliveries within each season in a logical order
+        const monthOrder = ['January', 'February', 'March', 'April', 'May', 'May_2', 'June', 'June_2', 'July', 'July_2', 'August', 'August_2', 'September', 'September_2', 'October', 'October_2', 'November', 'December'];
+        Object.keys(seasons).forEach(s => {
+          const sorted = {};
+          Object.keys(seasons[s].deliveries)
+            .sort((a, b) => {
+              const ai = monthOrder.indexOf(a);
+              const bi = monthOrder.indexOf(b);
+              return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+            })
+            .forEach(k => { sorted[k] = seasons[s].deliveries[k]; });
+          seasons[s].deliveries = sorted;
+        });
+
+        return seasons;
+      }, [data.pstData]);
+
+      const handleSeasonToggle = (season) => {
+        const current = data.selectedDeliveries || [];
+        const seasonDeliveries = Object.keys(seasonData[season]?.deliveries || {});
+        const allSelected = seasonDeliveries.every(d => current.includes(d));
+
+        let updated;
+        if (allSelected) {
+          updated = current.filter(d => !seasonDeliveries.includes(d));
+        } else {
+          const newSet = new Set([...current, ...seasonDeliveries]);
+          updated = Array.from(newSet);
+        }
+        onDataChange({ ...data, selectedDeliveries: updated, selectedSeason: allSelected ? '' : season });
+      };
+
+      const handleDeliveryToggle = (delivery) => {
+        const current = data.selectedDeliveries || [];
+        const updated = current.includes(delivery)
+          ? current.filter(d => d !== delivery)
+          : [...current, delivery];
+        onDataChange({ ...data, selectedDeliveries: updated });
+      };
+
+      const selectedSkuCount = useMemo(() => {
+        if (!data.selectedDeliveries || data.selectedDeliveries.length === 0) return 0;
+        return (data.pstData || []).filter(row => {
+          const dm = String(row.deliveryMonth || '').trim();
+          return data.selectedDeliveries.includes(dm);
+        }).length;
+      }, [data.pstData, data.selectedDeliveries]);
+
+      return (
+        <div className="space-y-8">
+          <h2 className="text-2xl font-bold text-gray-800">Step 3: Delivery Selection</h2>
+
+          <div className="mb-8">
+            <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer hover:border-gray-400 transition"
+              onClick={() => fileInputRef.current?.click()}>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".xlsx"
+                onChange={handleFileUpload}
+                className="hidden"
+              />
+              <div className="text-lg font-semibold text-gray-700">Upload PST (.xlsx)</div>
+              <p className="text-sm text-gray-500 mt-2">Click or drag PST file</p>
+            </div>
+          </div>
+
+          {/* Auto-selection info */}
+          {(data.pstData || []).length > 0 && (data.selectedDeliveries || []).length > 0 && (() => {
+            const openDateStr = data.proFormaData?.newStoreOpenDate || '';
+            let asstQtr = '';
+            if (openDateStr) {
+              const d = (() => {
+                const s = String(openDateStr).trim();
+                if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return new Date(s + 'T12:00:00');
+                const parts = s.split('/');
+                if (parts.length === 3) { let [m,dd,y] = parts.map(Number); if (y<100) y+=y<50?2000:1900; return new Date(y,m-1,dd); }
+                return null;
+              })();
+              if (d) {
+                const m = d.getMonth();
+                if (m >= 1 && m <= 3) asstQtr = 'Spring';
+                else if (m >= 4 && m <= 6) asstQtr = 'Summer';
+                else if (m >= 7 && m <= 9) asstQtr = 'Fall';
+                else asstQtr = 'Holiday';
+              }
+            }
+            if (!asstQtr) return null;
+            return (
+              <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-md">
+                <p className="text-sm text-green-800">
+                  Delivery months auto-selected for <strong>{asstQtr}</strong> season based on Opening Asst Qtr. You can manually add or remove months below.
+                </p>
+              </div>
+            );
+          })()}
+
+          {/* Season-based Delivery Selection */}
+          {Object.keys(seasonData).length > 0 ? (
+            <div className="space-y-6">
+              {Object.entries(seasonData).map(([season, sData]) => {
+                const monthKeys = Object.keys(sData.deliveries);
+                const currentSelected = data.selectedDeliveries || [];
+                const allChecked = monthKeys.length > 0 && monthKeys.every(d => currentSelected.includes(d));
+                const someChecked = monthKeys.some(d => currentSelected.includes(d));
+                const checkedCount = monthKeys.filter(d => currentSelected.includes(d)).length;
+
+                return (
+                  <div key={season} className="bg-white rounded-lg shadow-md overflow-hidden">
+                    {/* Season Header — click to select/deselect all */}
+                    <div
+                      className={`p-5 cursor-pointer flex items-center justify-between ${allChecked ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-800 hover:bg-gray-200'}`}
+                      onClick={() => handleSeasonToggle(season)}
+                    >
+                      <div className="flex items-center space-x-4">
+                        <input
+                          type="checkbox"
+                          checked={allChecked}
+                          readOnly
+                          className="w-5 h-5 rounded cursor-pointer"
+                        />
+                        <div>
+                          <h3 className="text-lg font-bold">{season}</h3>
+                          <p className={`text-sm ${allChecked ? 'text-blue-100' : 'text-gray-500'}`}>
+                            {monthKeys.length} delivery months · {sData.totalSKUs} total SKUs
+                          </p>
+                        </div>
+                      </div>
+                      <span className="text-sm font-semibold">{allChecked ? 'All Selected' : someChecked ? checkedCount + '/' + monthKeys.length + ' selected' : 'Click to select'}</span>
+                    </div>
+
+                    {/* Individual Delivery Months */}
+                    <div className="p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {monthKeys.map(month => (
+                        <label key={month} className={`flex items-start space-x-3 p-3 border rounded-lg cursor-pointer transition ${currentSelected.includes(month) ? 'border-blue-400 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'}`}>
+                          <input
+                            type="checkbox"
+                            checked={currentSelected.includes(month)}
+                            onChange={() => handleDeliveryToggle(month)}
+                            className="w-4 h-4 text-blue-600 border-gray-300 rounded cursor-pointer mt-0.5"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="font-semibold text-gray-800 text-sm">{month}</div>
+                            <div className="text-xs text-gray-500">{sData.deliveries[month].skuCount} SKUs</div>
+                            <div className="text-xs text-gray-400 truncate">{Array.from(sData.deliveries[month].categories).join(', ')}</div>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="bg-gray-50 rounded-lg p-8 text-center text-gray-500">
+              Upload a PST file to see available seasons and deliveries.
+            </div>
+          )}
+
+          {/* Summary */}
+          {(data.selectedDeliveries || []).length > 0 && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-6">
+              <h3 className="text-lg font-bold text-gray-800 mb-2">Selection Summary</h3>
+              <div className="text-sm text-gray-700 space-y-1">
+                <p>Selected delivery months: <span className="font-semibold">{(data.selectedDeliveries || []).join(', ')}</span></p>
+                <p>Total SKUs in selection: <span className="font-bold text-lg text-blue-700">{selectedSkuCount}</span></p>
+              </div>
+            </div>
+          )}
+
+          <div className="flex justify-between pt-8 border-t border-gray-200">
+            <button
+              onClick={() => onPrev(2)}
+              className="px-6 py-2 bg-gray-400 text-white rounded-md font-semibold hover:bg-gray-500"
+            >
+              Previous
+            </button>
+            <button
+              onClick={() => onNext(4)}
+              className="px-6 py-2 bg-blue-600 text-white rounded-md font-semibold hover:bg-blue-700"
+            >
+              Next: Assortment Builder
+            </button>
+          </div>
+        </div>
+      );
+    };
+
+    // ============================================
+    // STEP 4: ASSORTMENT REVIEW (Combined Builder + Merchant Review)
+    // ============================================
+
+    const Step4 = ({ onNext, onPrev, onDataChange, data }) => {
+      const [page, setPage] = useState(0);
+      const [filters, setFilters] = useState({
+        sku: [],
+        styleDescription: [],
+        colorDescription: [],
+        department: [],
+        category: [],
+        subcategory: [],
+        deliveryMonth: [],
+        storeTier: [],
+        seasonalLifeCycle: [],
+        mdExitWeek: [],
+        action: [],
+        notes: [],
+      });
+      const setFilter = (key, val) => { setFilters(f => ({ ...f, [key]: val })); setPage(0); };
+
+      // All state declarations first (before any useMemo that references them)
+      const [selectedRows, setSelectedRows] = useState(new Set());
+      const [skuActions, setSkuActions] = useState(data.skuActions || {});
+      const [skuNotes, setSkuNotes] = useState(data.skuNotes || {});
+      const [divisionSignoffs, setDivisionSignoffs] = useState(data.divisionSignoffs || {});
+      const [skuTargets, setSkuTargets] = useState(data.skuTargets || {});
+      const [addSkuInput, setAddSkuInput] = useState('');
+      const [addedSkus, setAddedSkus] = useState(data.addedSkus || []);
+      const [addSkuError, setAddSkuError] = useState('');
+
+      // Build base data (delivery month + store group match + manually added SKUs)
+      const baseData = useMemo(() => {
+        const selectedDeliveries = data.selectedDeliveries || [];
+        const selectedGroups = data.selectedGroups || [];
+        const matched = (data.pstData || []).filter(row => {
+          const dm = String(row.deliveryMonth || '').trim();
+          const matchesDelivery = selectedDeliveries.length === 0 ||
+            selectedDeliveries.includes(dm);
+          const matchesTier = selectedGroups.length === 0 ||
+            selectedGroups.includes(row.storeTier) ||
+            row.storeTier === 'ALL STORES';
+          return matchesDelivery && matchesTier;
+        });
+        // Merge in manually added SKUs (avoid duplicates)
+        const matchedSkus = new Set(matched.map(r => r.sku));
+        const extras = addedSkus.filter(r => !matchedSkus.has(r.sku));
+        return [...matched, ...extras];
+      }, [data.pstData, data.selectedDeliveries, data.selectedGroups, addedSkus]);
+
+      const uniqueVals = useMemo(() => ({
+        sku: [...new Set(baseData.map(r => r.sku).filter(Boolean))].sort(),
+        styleDescription: [...new Set(baseData.map(r => r.styleDescription).filter(Boolean))].sort(),
+        colorDescription: [...new Set(baseData.map(r => r.colorDescription).filter(Boolean))].sort(),
+        department: [...new Set(baseData.map(r => r.department).filter(Boolean))].sort(),
+        category: [...new Set(baseData.map(r => r.category).filter(Boolean))].sort(),
+        subcategory: [...new Set(baseData.map(r => r.subcategory).filter(Boolean))].sort(),
+        deliveryMonth: [...new Set(baseData.map(r => r.deliveryMonth).filter(Boolean))].sort(),
+        storeTier: [...new Set(baseData.map(r => r.storeTier).filter(Boolean))].sort(),
+        seasonalLifeCycle: [...new Set(baseData.map(r => r.seasonalLifeCycle).filter(Boolean))].sort(),
+        mdExitWeek: [...new Set(baseData.map(r => r.mdExitWeek).filter(Boolean))].sort(),
+        notes: [...new Set(baseData.map(r => skuNotes[r.sku]).filter(Boolean))].sort(),
+      }), [baseData, skuNotes]);
+
+      // Keep these for backward compat with summary stats
+      const departments = uniqueVals.department;
+      const categories = uniqueVals.category;
+      const subcategories = uniqueVals.subcategory;
+      const storeTiers = uniqueVals.storeTier;
+
+      // Apply column filters on top of base data
+      const filteredData = useMemo(() => {
+        return baseData.filter(row => {
+          if (filters.sku.length && !filters.sku.includes(row.sku)) return false;
+          if (filters.styleDescription.length && !filters.styleDescription.includes(row.styleDescription)) return false;
+          if (filters.colorDescription.length && !filters.colorDescription.includes(row.colorDescription)) return false;
+          if (filters.department.length && !filters.department.includes(row.department)) return false;
+          if (filters.category.length && !filters.category.includes(row.category)) return false;
+          if (filters.subcategory.length && !filters.subcategory.includes(row.subcategory)) return false;
+          if (filters.deliveryMonth.length && !filters.deliveryMonth.includes(row.deliveryMonth)) return false;
+          if (filters.storeTier.length && !filters.storeTier.includes(row.storeTier)) return false;
+          if (filters.seasonalLifeCycle.length && !filters.seasonalLifeCycle.includes(row.seasonalLifeCycle)) return false;
+          if (filters.mdExitWeek.length && !filters.mdExitWeek.includes(row.mdExitWeek)) return false;
+          if (filters.action.length) {
+            const act = skuActions[row.sku] || 'Keep';
+            if (!filters.action.includes(act)) return false;
+          }
+          if (filters.notes.length) {
+            const note = skuNotes[row.sku] || '';
+            if (!filters.notes.includes(note)) return false;
+          }
+          return true;
+        });
+      }, [baseData, filters, skuActions, skuNotes]);
+
+      const pageSize = 50;
+      const sortedData = useMemo(() => {
+        return [...filteredData].sort((a, b) => {
+          return (a.department || '').localeCompare(b.department || '')
+            || (a.category || '').localeCompare(b.category || '')
+            || (a.subcategory || '').localeCompare(b.subcategory || '')
+            || (a.styleDescription || '').localeCompare(b.styleDescription || '')
+            || (a.colorDescription || '').localeCompare(b.colorDescription || '');
+        });
+      }, [filteredData]);
+      const paginatedData = sortedData.slice(page * pageSize, (page + 1) * pageSize);
+
+      const summaryStats = useMemo(() => {
+        const deptBreakdown = {};
+        filteredData.forEach(row => {
+          deptBreakdown[row.department] = (deptBreakdown[row.department] || 0) + 1;
+        });
+        return {
+          totalSKUs: filteredData.length,
+          deptBreakdown,
+        };
+      }, [filteredData]);
+
+      const summary = useMemo(() => {
+        let keeps = 0, drops = 0, adds = 0;
+        filteredData.forEach(row => {
+          const action = skuActions[row.sku] || 'Keep';
+          if (action === 'Keep') keeps++;
+          else if (action === 'Drop') drops++;
+          else if (action === 'Add') adds++;
+        });
+        return { total: filteredData.length, keeps, drops, adds, net: keeps + adds };
+      }, [skuActions, filteredData]);
+
+      const handleRowSelect = (idx) => {
+        const updated = new Set(selectedRows);
+        if (updated.has(idx)) updated.delete(idx);
+        else updated.add(idx);
+        setSelectedRows(updated);
+      };
+
+      const handleBulkAction = (action) => {
+        const newActions = { ...skuActions };
+        selectedRows.forEach(idx => {
+          const sku = paginatedData[idx]?.sku;
+          if (sku) newActions[sku] = action;
+        });
+        setSkuActions(newActions);
+        setSelectedRows(new Set());
+      };
+
+      const handleActionChange = (sku, action) => {
+        setSkuActions({ ...skuActions, [sku]: action });
+      };
+
+      const handleNoteChange = (sku, note) => {
+        setSkuNotes({ ...skuNotes, [sku]: note });
+      };
+
+      const handleAddSku = () => {
+        const input = addSkuInput.trim();
+        if (!input) return;
+        setAddSkuError('');
+
+        // Support comma-separated or space-separated SKU entry
+        const skusToAdd = input.split(/[,\s]+/).map(s => s.trim()).filter(Boolean);
+        const allPst = data.pstData || [];
+        const newAdded = [...addedSkus];
+        const errors = [];
+
+        skusToAdd.forEach(skuVal => {
+          // Check if already in the assortment
+          const alreadyInBase = baseData.find(r => r.sku === skuVal);
+          const alreadyAdded = newAdded.find(r => r.sku === skuVal);
+          if (alreadyInBase || alreadyAdded) {
+            errors.push(skuVal + ' already in assortment');
+            return;
+          }
+          // Look up in full PST data
+          const found = allPst.find(r => r.sku === skuVal);
+          if (found) {
+            newAdded.push({ ...found });
+            setSkuActions(prev => ({ ...prev, [skuVal]: 'Add' }));
+          } else {
+            errors.push(skuVal + ' not found in PST');
+          }
+        });
+
+        setAddedSkus(newAdded);
+        setAddSkuInput('');
+        if (errors.length > 0) {
+          setAddSkuError(errors.join('; '));
+        }
+      };
+
+      // Net SKU count per department (Keep + Add only, from baseData not filteredData)
+      const netByDept = useMemo(() => {
+        const counts = {};
+        let totalNet = 0;
+        baseData.forEach(row => {
+          const dept = row.department || 'Other';
+          const action = skuActions[row.sku] || 'Keep';
+          if (action !== 'Drop') {
+            counts[dept] = (counts[dept] || 0) + 1;
+            totalNet++;
+          }
+        });
+        counts['__total__'] = totalNet;
+        return counts;
+      }, [baseData, skuActions]);
+
+      const handleSignoff = (division) => {
+        const now = new Date();
+        const timestamp = now.toLocaleDateString() + ' ' + now.toLocaleTimeString();
+        const name = prompt('Enter your name for sign-off:');
+        if (!name) return;
+        const updated = {
+          ...divisionSignoffs,
+          [division]: [...(divisionSignoffs[division] || []), { name, date: timestamp }],
+        };
+        setDivisionSignoffs(updated);
+        onDataChange({ ...data, divisionSignoffs: updated });
+      };
+
+      const handleExport = () => {
+        const exportData = sortedData.map(row => ({
+          SKU: row.sku,
+          Division: row.department,
+          Category: row.category,
+          Subcategory: row.subcategory,
+          'Style Description': row.styleDescription,
+          'Color Description': row.colorDescription,
+          'Seasonal LC': row.seasonalLifeCycle,
+          'Delivery Month': row.deliveryMonth,
+          'Store Tier': row.storeTier,
+          'MD Exit Week': row.mdExitWeek,
+          Action: skuActions[row.sku] || 'Keep',
+          Notes: skuNotes[row.sku] || '',
+        }));
+        const ws = XLSX.utils.json_to_sheet(exportData);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Assortment Review');
+        XLSX.writeFile(wb, 'assortment-review.xlsx');
+      };
+
+      // Division-level counts for sign-off section
+      const divisionCounts = useMemo(() => {
+        const counts = {};
+        filteredData.forEach(row => {
+          const dept = row.department || 'Other';
+          if (!counts[dept]) counts[dept] = { total: 0, keeps: 0, drops: 0, adds: 0 };
+          counts[dept].total++;
+          const action = skuActions[row.sku] || 'Keep';
+          if (action === 'Keep') counts[dept].keeps++;
+          else if (action === 'Drop') counts[dept].drops++;
+          else if (action === 'Add') counts[dept].adds++;
+        });
+        return counts;
+      }, [filteredData, skuActions]);
+
+      return (
+        <div className="space-y-6">
+          <h2 className="text-2xl font-bold text-gray-800">Step 4: Assortment Review</h2>
+
+          {/* SKU Target & Variance Summary */}
+          <div className="bg-white rounded-lg shadow-md p-5">
+            <h3 className="text-sm font-bold text-gray-800 mb-4">SKU Targets & Variance</h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm border-collapse">
+                <thead>
+                  <tr className="border-b-2 border-gray-300 bg-gray-50">
+                    <th className="px-3 py-2 text-left text-xs font-bold text-gray-600"></th>
+                    {departments.map(dept => (
+                      <th key={dept} className="px-3 py-2 text-center text-xs font-bold text-gray-700">{dept}</th>
+                    ))}
+                    <th className="px-3 py-2 text-center text-xs font-bold text-gray-900 bg-gray-100">TOTAL</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="border-b border-gray-200">
+                    <td className="px-3 py-2 text-xs font-semibold text-gray-600">Target</td>
+                    {departments.map(dept => (
+                      <td key={dept} className="px-3 py-1 text-center">
+                        <input
+                          type="number"
+                          value={skuTargets[dept] || ''}
+                          onChange={(e) => { const v = e.target.value; const updated = {...skuTargets, [dept]: v}; setSkuTargets(updated); onDataChange({...data, skuTargets: updated}); }}
+                          placeholder="—"
+                          className="w-16 px-1 py-1 border border-gray-300 rounded text-xs text-center"
+                        />
+                      </td>
+                    ))}
+                    <td className="px-3 py-2 text-center bg-gray-50 text-xs font-bold text-gray-900">
+                      {departments.reduce((sum, dept) => sum + (parseInt(skuTargets[dept]) || 0), 0) || '—'}
+                    </td>
+                  </tr>
+                  <tr className="border-b border-gray-200">
+                    <td className="px-3 py-2 text-xs font-semibold text-gray-600">Net SKUs</td>
+                    {departments.map(dept => (
+                      <td key={dept} className="px-3 py-2 text-center text-xs font-bold">{netByDept[dept] || 0}</td>
+                    ))}
+                    <td className="px-3 py-2 text-center text-xs font-bold bg-gray-50">{netByDept['__total__'] || 0}</td>
+                  </tr>
+                  <tr>
+                    <td className="px-3 py-2 text-xs font-semibold text-gray-600">Variance</td>
+                    {departments.map(dept => {
+                      const target = parseInt(skuTargets[dept]) || 0;
+                      const net = netByDept[dept] || 0;
+                      const variance = target ? net - target : null;
+                      return (
+                        <td key={dept} className="px-3 py-2 text-center">
+                          {variance !== null ? (
+                            <span className={`text-xs font-bold ${variance > 0 ? 'text-red-600' : variance < 0 ? 'text-orange-500' : 'text-green-600'}`}>
+                              {variance > 0 ? '+' : ''}{variance}
+                            </span>
+                          ) : <span className="text-xs text-gray-300">—</span>}
+                        </td>
+                      );
+                    })}
+                    {(() => {
+                      const totalTarget = departments.reduce((sum, dept) => sum + (parseInt(skuTargets[dept]) || 0), 0);
+                      const totalNet = netByDept['__total__'] || 0;
+                      const totalVar = totalTarget ? totalNet - totalTarget : null;
+                      return (
+                        <td className="px-3 py-2 text-center bg-gray-50">
+                          {totalVar !== null ? (
+                            <span className={`text-xs font-bold ${totalVar > 0 ? 'text-red-600' : totalVar < 0 ? 'text-orange-500' : 'text-green-600'}`}>
+                              {totalVar > 0 ? '+' : ''}{totalVar}
+                            </span>
+                          ) : <span className="text-xs text-gray-300">—</span>}
+                        </td>
+                      );
+                    })()}
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-3 flex gap-4 text-xs text-gray-500">
+              <span>Total SKUs in assortment: <strong className="text-gray-800">{summary.total}</strong></span>
+              <span>Keeps: <strong className="text-green-600">{summary.keeps}</strong></span>
+              <span>Drops: <strong className="text-red-600">{summary.drops}</strong></span>
+              <span>Net: <strong className="text-purple-600">{summary.net}</strong></span>
+            </div>
+          </div>
+
+          {/* Add SKU + Bulk Actions + Export */}
+          <div className="bg-white rounded-lg shadow-md p-3 space-y-2">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-gray-600 whitespace-nowrap">Add SKU:</span>
+              <input
+                type="text"
+                value={addSkuInput}
+                onChange={(e) => { setAddSkuInput(e.target.value); setAddSkuError(''); }}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleAddSku(); }}
+                placeholder="Enter SKU(s) — comma or space separated"
+                className="flex-1 px-2 py-1.5 border border-gray-300 rounded text-xs"
+              />
+              <button onClick={handleAddSku} className="px-3 py-1.5 bg-green-600 text-white rounded text-xs font-semibold hover:bg-green-700 whitespace-nowrap">+ Add</button>
+              {addSkuError && <span className="text-xs text-red-500">{addSkuError}</span>}
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <button onClick={() => handleBulkAction('Keep')} disabled={selectedRows.size === 0} className="px-3 py-1.5 bg-green-600 text-white rounded text-xs font-semibold hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed">Keep ({selectedRows.size})</button>
+              <button onClick={() => handleBulkAction('Drop')} disabled={selectedRows.size === 0} className="px-3 py-1.5 bg-red-600 text-white rounded text-xs font-semibold hover:bg-red-700 disabled:bg-gray-300 disabled:cursor-not-allowed">Drop ({selectedRows.size})</button>
+              <div className="flex-1" />
+              {Object.values(filters).some(v => v && v.length > 0) && (
+                <button onClick={() => { setFilters({ sku:[], styleDescription:[], colorDescription:[], department:[], category:[], subcategory:[], deliveryMonth:[], storeTier:[], seasonalLifeCycle:[], mdExitWeek:[], action:[], notes:[] }); setPage(0); }} className="px-3 py-1.5 bg-yellow-500 text-white rounded text-xs font-semibold hover:bg-yellow-600">Clear All Filters</button>
+              )}
+              <button onClick={handleExport} className="px-3 py-1.5 bg-gray-700 text-white rounded text-xs font-semibold hover:bg-gray-800">Export Excel</button>
+            </div>
+          </div>
+
+          {/* Assortment Review Table with Inline Filters */}
+          <div className="bg-white rounded-lg shadow-md p-4">
+            <div className="text-sm text-gray-600 mb-2">Showing {Math.min(page * pageSize + 1, filteredData.length)}-{Math.min((page + 1) * pageSize, filteredData.length)} of {filteredData.length}</div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm border-collapse">
+                <thead>
+                  {/* Header row */}
+                  <tr className="bg-gray-100 border-b border-gray-300">
+                    <th className="px-1 py-1.5 text-left" style={{width:'30px'}}><input type="checkbox" onChange={(e) => { e.target.checked ? setSelectedRows(new Set(paginatedData.map((_, i) => i))) : setSelectedRows(new Set()); }} className="w-3.5 h-3.5" /></th>
+                    <th className="px-1 py-1.5 text-left text-xs font-bold">SKU</th>
+                    <th className="px-1 py-1.5 text-left text-xs font-bold">Division</th>
+                    <th className="px-1 py-1.5 text-left text-xs font-bold">Category</th>
+                    <th className="px-1 py-1.5 text-left text-xs font-bold">Subcategory</th>
+                    <th className="px-1 py-1.5 text-left text-xs font-bold">Style Description</th>
+                    <th className="px-1 py-1.5 text-left text-xs font-bold">Color Description</th>
+                    <th className="px-1 py-1.5 text-left text-xs font-bold">Seasonal LC</th>
+                    <th className="px-1 py-1.5 text-left text-xs font-bold">Delivery</th>
+                    <th className="px-1 py-1.5 text-left text-xs font-bold">Store Tier</th>
+                    <th className="px-1 py-1.5 text-left text-xs font-bold">MD Exit Wk</th>
+                    <th className="px-1 py-1.5 text-left text-xs font-bold">Action</th>
+                    <th className="px-1 py-1.5 text-left text-xs font-bold">Notes</th>
+                  </tr>
+                  {/* Filter row */}
+                  <tr className="bg-gray-50 border-b-2 border-gray-300">
+                    <th className="px-1 py-1"></th>
+                    <th className="px-1 py-1"><MultiSelectFilter options={uniqueVals.sku} selected={filters.sku} onChange={(v) => setFilter('sku', v)} /></th>
+                    <th className="px-1 py-1"><MultiSelectFilter options={uniqueVals.department} selected={filters.department} onChange={(v) => setFilter('department', v)} /></th>
+                    <th className="px-1 py-1"><MultiSelectFilter options={uniqueVals.category} selected={filters.category} onChange={(v) => setFilter('category', v)} /></th>
+                    <th className="px-1 py-1"><MultiSelectFilter options={uniqueVals.subcategory} selected={filters.subcategory} onChange={(v) => setFilter('subcategory', v)} /></th>
+                    <th className="px-1 py-1"><MultiSelectFilter options={uniqueVals.styleDescription} selected={filters.styleDescription} onChange={(v) => setFilter('styleDescription', v)} /></th>
+                    <th className="px-1 py-1"><MultiSelectFilter options={uniqueVals.colorDescription} selected={filters.colorDescription} onChange={(v) => setFilter('colorDescription', v)} /></th>
+                    <th className="px-1 py-1"><MultiSelectFilter options={uniqueVals.seasonalLifeCycle} selected={filters.seasonalLifeCycle} onChange={(v) => setFilter('seasonalLifeCycle', v)} /></th>
+                    <th className="px-1 py-1"><MultiSelectFilter options={uniqueVals.deliveryMonth} selected={filters.deliveryMonth} onChange={(v) => setFilter('deliveryMonth', v)} /></th>
+                    <th className="px-1 py-1"><MultiSelectFilter options={uniqueVals.storeTier} selected={filters.storeTier} onChange={(v) => setFilter('storeTier', v)} /></th>
+                    <th className="px-1 py-1"><MultiSelectFilter options={uniqueVals.mdExitWeek} selected={filters.mdExitWeek} onChange={(v) => setFilter('mdExitWeek', v)} /></th>
+                    <th className="px-1 py-1"><MultiSelectFilter options={['Keep', 'Drop', 'Add']} selected={filters.action} onChange={(v) => setFilter('action', v)} /></th>
+                    <th className="px-1 py-1"><MultiSelectFilter options={uniqueVals.notes} selected={filters.notes} onChange={(v) => setFilter('notes', v)} /></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {paginatedData.map((row, idx) => {
+                    const action = skuActions[row.sku] || 'Keep';
+                    const bgColor = action === 'Drop' ? 'bg-red-50' : action === 'Add' ? 'bg-green-50' : idx % 2 === 0 ? 'bg-white' : 'bg-gray-50';
+                    return (
+                      <tr key={idx} className={`${bgColor} border-b border-gray-200`}>
+                        <td className="px-2 py-1.5"><input type="checkbox" checked={selectedRows.has(idx)} onChange={() => handleRowSelect(idx)} className="w-3.5 h-3.5" /></td>
+                        <td className="px-2 py-1.5 text-xs font-mono">{row.sku}</td>
+                        <td className="px-2 py-1.5 text-xs">{row.department}</td>
+                        <td className="px-2 py-1.5 text-xs">{row.category}</td>
+                        <td className="px-2 py-1.5 text-xs">{row.subcategory}</td>
+                        <td className="px-2 py-1.5 text-xs">{row.styleDescription}</td>
+                        <td className="px-2 py-1.5 text-xs">{row.colorDescription}</td>
+                        <td className="px-2 py-1.5 text-xs">{row.seasonalLifeCycle}</td>
+                        <td className="px-2 py-1.5 text-xs">{row.deliveryMonth}</td>
+                        <td className="px-2 py-1.5 text-xs">{row.storeTier}</td>
+                        <td className="px-2 py-1.5 text-xs">{row.mdExitWeek}</td>
+                        <td className="px-2 py-1.5"><select value={action} onChange={(e) => handleActionChange(row.sku, e.target.value)} className="px-1 py-0.5 border border-gray-300 rounded text-xs"><option value="Keep">Keep</option><option value="Drop">Drop</option><option value="Add">Add</option></select></td>
+                        <td className="px-2 py-1.5"><input type="text" value={skuNotes[row.sku] || ''} onChange={(e) => handleNoteChange(row.sku, e.target.value)} placeholder="Notes..." className="w-full px-1 py-0.5 border border-gray-300 rounded text-xs" /></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex justify-between items-center mt-3">
+              <button onClick={() => setPage(Math.max(0, page - 1))} disabled={page === 0} className="px-3 py-1.5 bg-gray-400 text-white rounded text-xs font-semibold hover:bg-gray-500 disabled:bg-gray-300 disabled:cursor-not-allowed">Prev Page</button>
+              <span className="text-xs text-gray-600">Page {page + 1} of {Math.max(1, Math.ceil(filteredData.length / pageSize))}</span>
+              <button onClick={() => setPage(Math.min(Math.ceil(filteredData.length / pageSize) - 1, page + 1))} disabled={page >= Math.ceil(filteredData.length / pageSize) - 1} className="px-3 py-1.5 bg-gray-400 text-white rounded text-xs font-semibold hover:bg-gray-500 disabled:bg-gray-300 disabled:cursor-not-allowed">Next Page</button>
+            </div>
+          </div>
+
+          {/* Division Sign-Off Section */}
+          <div className="bg-white rounded-lg shadow-md p-6">
+            <h3 className="text-lg font-bold text-gray-800 mb-4">Division Sign-Off</h3>
+            <p className="text-sm text-gray-500 mb-4">Each division must be reviewed and signed off before proceeding to the Depth Review.</p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {Object.entries(divisionCounts).map(([dept, counts]) => {
+                const signoffs = divisionSignoffs[dept] || [];
+                const isSigned = signoffs.length > 0;
+                return (
+                  <div key={dept} className={`border-2 rounded-lg p-4 ${isSigned ? 'border-green-400 bg-green-50' : 'border-gray-200'}`}>
+                    <div className="flex justify-between items-start mb-3">
+                      <div>
+                        <h4 className="font-bold text-gray-800">{dept}</h4>
+                        <div className="text-xs text-gray-500 mt-1">
+                          {counts.total} SKUs · {counts.keeps} keep · {counts.drops} drop · {counts.adds} add
+                        </div>
+                      </div>
+                      {isSigned && <span className="text-green-600 text-lg font-bold">✓</span>}
+                    </div>
+                    {signoffs.length > 0 && (
+                      <div className="mb-3 space-y-1">
+                        {signoffs.map((s, i) => (
+                          <div key={i} className="text-xs text-gray-600 bg-white rounded px-2 py-1 border border-gray-200">
+                            <span className="font-semibold">{s.name}</span> — {s.date}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <button
+                      onClick={() => handleSignoff(dept)}
+                      className={`w-full px-3 py-2 rounded text-sm font-semibold ${isSigned ? 'bg-green-100 text-green-700 border border-green-300 hover:bg-green-200' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
+                    >
+                      {isSigned ? 'Add Additional Sign-Off' : 'Sign Off on ' + dept}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="flex justify-between pt-6 border-t border-gray-200">
+            <button onClick={() => onPrev(3)} className="px-6 py-2 bg-gray-400 text-white rounded-md font-semibold hover:bg-gray-500">Previous</button>
+            <button
+              onClick={() => { onDataChange({ ...data, skuActions, skuNotes, divisionSignoffs, skuTargets, addedSkus }); onNext(5); }}
+              className="px-6 py-2 bg-blue-600 text-white rounded-md font-semibold hover:bg-blue-700"
+            >
+              Next: Depth Review
+            </button>
+          </div>
+        </div>
+      );
+    };
+
+    // ============================================
+    // STEP 5: DEPTH REVIEW RECAP
+    // ============================================
+
+    const Step5 = ({ onNext, onPrev, data }) => {
+      const [depthTargets, setDepthTargets] = useState(data.skuTargets || {});
+      const [depthNotes, setDepthNotes] = useState({});
+      const [reservedUnits, setReservedUnits] = useState({});  // SKU → total quantity
+      const [reservedLoaded, setReservedLoaded] = useState(false);
+      const reservedFileRef = useRef(null);
+
+      const handleReservedUpload = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          try {
+            const wb = XLSX.read(new Uint8Array(event.target.result), { type: 'array' });
+            const sheet = wb.Sheets[wb.SheetNames[0]];
+            const rawData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+            // Find header row with "Sku" and "Quantity"
+            let headerIdx = 0;
+            for (let i = 0; i < Math.min(5, rawData.length); i++) {
+              const rowStr = (rawData[i] || []).map(c => String(c || '').toLowerCase()).join('|');
+              if (rowStr.includes('sku') && rowStr.includes('quantity')) { headerIdx = i; break; }
+            }
+            const headers = (rawData[headerIdx] || []).map(h => String(h || '').trim().toLowerCase());
+            const skuCol = headers.findIndex(h => h === 'sku');
+            const qtyCol = headers.findIndex(h => h === 'quantity');
+
+            if (skuCol < 0 || qtyCol < 0) {
+              alert('Could not find SKU and Quantity columns in the Reserved Units file.');
+              return;
+            }
+
+            // Sum quantity by SKU
+            const units = {};
+            for (let i = headerIdx + 1; i < rawData.length; i++) {
+              const row = rawData[i];
+              if (!Array.isArray(row)) continue;
+              const sku = String(row[skuCol] || '').trim();
+              const qty = parseInt(row[qtyCol]) || 0;
+              if (sku) units[sku] = (units[sku] || 0) + qty;
+            }
+            setReservedUnits(units);
+            setReservedLoaded(true);
+          } catch (error) {
+            alert('Error parsing Reserved Units file: ' + error.message);
+          }
+        };
+        reader.readAsArrayBuffer(file);
+      };
+
+      // Use the EXACT same data as the Assortment Review:
+      // delivery month + store group filter + manually added SKUs
+      const filteredData = useMemo(() => {
+        const selectedDeliveries = data.selectedDeliveries || [];
+        const selectedGroups = data.selectedGroups || [];
+        const addedSkus = data.addedSkus || [];
+
+        const matched = (data.pstData || []).filter(row => {
+          const dm = String(row.deliveryMonth || '').trim();
+          const matchesDelivery = selectedDeliveries.length === 0 ||
+            selectedDeliveries.includes(dm);
+          const matchesTier = selectedGroups.length === 0 ||
+            selectedGroups.includes(row.storeTier) ||
+            row.storeTier === 'ALL STORES';
+          return matchesDelivery && matchesTier;
+        });
+
+        // Merge in manually added SKUs from Assortment Review
+        const matchedSkus = new Set(matched.map(r => r.sku));
+        const extras = addedSkus.filter(r => !matchedSkus.has(r.sku));
+        return [...matched, ...extras];
+      }, [data.pstData, data.selectedDeliveries, data.selectedGroups, data.addedSkus]);
+
+      // Build depth review data — rows for divisions and categories
+      // Units come from the Reserved Units file, not the PST
+      const depthRows = useMemo(() => {
+        const skuActions = data.skuActions || {};
+        const rows = [];
+        const divisionOrder = ['Mens', 'Womens', 'Non Apparel', 'Kids', 'Accessories'];
+        const deptMap = {};
+
+        filteredData.forEach(row => {
+          const action = skuActions[row.sku] || 'Keep';
+          if (action === 'Drop') return;
+          const dept = row.department || 'Other';
+          const cat = row.category || 'Other';
+          if (!deptMap[dept]) deptMap[dept] = { skus: 0, units: 0, cats: {} };
+          if (!deptMap[dept].cats[cat]) deptMap[dept].cats[cat] = { skus: 0, units: 0 };
+          deptMap[dept].skus++;
+          deptMap[dept].cats[cat].skus++;
+          // Units from Reserved Units file (summed by SKU)
+          const units = reservedUnits[row.sku] || 0;
+          deptMap[dept].units += units;
+          deptMap[dept].cats[cat].units += units;
+        });
+
+        let totalSkus = 0, totalUnits = 0;
+        Object.values(deptMap).forEach(d => { totalSkus += d.skus; totalUnits += d.units; });
+
+        // Build ordered rows
+        const orderedDepts = Object.keys(deptMap).sort((a, b) => {
+          const ai = divisionOrder.indexOf(a);
+          const bi = divisionOrder.indexOf(b);
+          return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+        });
+
+        orderedDepts.forEach(dept => {
+          const d = deptMap[dept];
+          rows.push({
+            key: dept,
+            label: dept.toUpperCase(),
+            isDivision: true,
+            skus: d.skus,
+            units: d.units,
+            pctSku: totalSkus > 0 ? ((d.skus / totalSkus) * 100).toFixed(0) + '%' : '0%',
+          });
+          const cats = Object.keys(d.cats).sort();
+          cats.forEach(cat => {
+            const c = d.cats[cat];
+            rows.push({
+              key: dept + '|' + cat,
+              label: cat,
+              isDivision: false,
+              parentDept: dept,
+              skus: c.skus,
+              units: c.units,
+              pctSku: totalSkus > 0 ? ((c.skus / totalSkus) * 100).toFixed(0) + '%' : '0%',
+            });
+          });
+        });
+
+        return { rows, totalSkus, totalUnits };
+      }, [filteredData, data.skuActions, reservedUnits]);
+
+      // Sim store name for comparison column
+      const simStoreName = data.simStore || data.proFormaData?.compStoreName || 'Sim Store';
+      const newStoreName = data.proFormaData?.newStoreName || 'New Store';
+
+      // Look up Sim Store tiers from the Store Tiering Tool division sheets
+      const simStoreTiers = useMemo(() => {
+        const tiers = { mens: '—', womens: '—', nonApparel: '—', kids: '—' };
+        const td = data.storeTieringData || {};
+        const simName = (data.simStore || '').toLowerCase();
+        if (!simName) return tiers;
+
+        const findTier = (divData) => {
+          if (!Array.isArray(divData)) return '—';
+          const match = divData.find(r => {
+            const store = String(r['Store'] || r['store'] || '').toLowerCase();
+            return store === simName || store.includes(simName) || simName.includes(store);
+          });
+          if (!match) return '—';
+          const override = match['Override Tier'];
+          if (override && String(override).trim()) return String(override).trim();
+          const proposed = match['Proposed Tier'];
+          if (proposed && String(proposed).trim()) return String(proposed).trim();
+          return '—';
+        };
+
+        tiers.mens = findTier(td.mensData);
+        tiers.womens = findTier(td.womensData);
+        tiers.nonApparel = findTier(td.nonApparel);
+        tiers.kids = findTier(td.kidsData);
+        return tiers;
+      }, [data.storeTieringData, data.simStore]);
+
+      const handleExport = () => {
+        const exportData = depthRows.rows.map(row => ({
+          Division: row.isDivision ? row.label : '',
+          Category: row.isDivision ? '' : row.label,
+          'Target SKUs': depthTargets[row.key] || '',
+          'Plan SKU Count': row.skus,
+          '% TTL SKU': row.pctSku,
+          Units: row.units,
+          Notes: depthNotes[row.key] || '',
+        }));
+        exportData.push({
+          Division: 'TOTAL', Category: '', 'Target SKUs': '',
+          'Plan SKU Count': depthRows.totalSkus,
+          '% TTL SKU': '100%',
+          Units: depthRows.totalUnits,
+          Notes: '',
+        });
+        const ws = XLSX.utils.json_to_sheet(exportData);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Depth Review');
+        XLSX.writeFile(wb, 'depth-review.xlsx');
+      };
+
+      return (
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <h2 className="text-2xl font-bold text-gray-800">Step 5: Depth Review</h2>
+            <button onClick={handleExport} className="px-4 py-2 bg-green-600 text-white rounded-md text-sm font-semibold hover:bg-green-700">Export to Excel</button>
+          </div>
+
+          {/* Store Info Header */}
+          <div className="bg-white rounded-lg shadow-md p-4">
+            <div className="grid grid-cols-2 gap-8">
+              <div>
+                <h3 className="text-sm font-bold text-blue-700 mb-2">{simStoreName} (Sim Store)</h3>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                  <span className="text-gray-500">Sqft:</span><span className="font-semibold">{fmtNum(data.proFormaData?.compStoreGrossSqft) || '—'}</span>
+                  <span className="text-gray-500">Selling Sqft:</span><span className="font-semibold">{fmtNum(data.proFormaData?.compStoreSellingSquareFeet) || '—'}</span>
+                  <span className="text-gray-500">Mens Tier:</span><span className="font-semibold">{simStoreTiers.mens}</span>
+                  <span className="text-gray-500">Womens Tier:</span><span className="font-semibold">{simStoreTiers.womens}</span>
+                </div>
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-green-700 mb-2">{newStoreName} (New Store)</h3>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                  <span className="text-gray-500">Sqft:</span><span className="font-semibold">{fmtNum(data.proFormaData?.newStoreGrossSqft) || '—'}</span>
+                  <span className="text-gray-500">Selling Sqft:</span><span className="font-semibold">{fmtNum(data.proFormaData?.newStoreSellingSquareFeet) || '—'}</span>
+                  <span className="text-gray-500">Mens Tier:</span><span className="font-semibold">{(data.assignedTiers || {}).mens || '—'}</span>
+                  <span className="text-gray-500">Womens Tier:</span><span className="font-semibold">{(data.assignedTiers || {}).womens || '—'}</span>
+                  <span className="text-gray-500">Non Apparel Tier:</span><span className="font-semibold">{(data.assignedTiers || {}).nonApparel || '—'}</span>
+                  <span className="text-gray-500">Kids Tier:</span><span className="font-semibold">{(data.assignedTiers || {}).kids || '—'}</span>
+                  <span className="text-gray-500">Net Sales:</span><span className="font-semibold">{fmtNum(data.proFormaData?.newStoreNetSales) || '—'}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Reserved Units Upload */}
+          <div className={`rounded-lg shadow-md p-4 ${reservedLoaded ? 'bg-green-50 border border-green-200' : 'bg-white'}`}>
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-gray-800">Reserved Units</h3>
+                <p className="text-xs text-gray-500 mt-1">
+                  {reservedLoaded
+                    ? 'Loaded — ' + Object.keys(reservedUnits).length + ' SKUs with reserved units'
+                    : 'Upload the Reserved Units file to populate units and avg depth'}
+                </p>
+              </div>
+              <button
+                onClick={() => reservedFileRef.current?.click()}
+                className={`px-4 py-2 rounded text-xs font-semibold ${reservedLoaded ? 'bg-green-600 text-white hover:bg-green-700' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
+              >
+                {reservedLoaded ? 'Reload File' : 'Upload Reserved Units (.xlsx)'}
+              </button>
+              <input ref={reservedFileRef} type="file" accept=".xlsx,.xls" onChange={handleReservedUpload} className="hidden" />
+            </div>
+          </div>
+
+          {/* Main Depth Review Table */}
+          <div className="bg-white rounded-lg shadow-md overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs border-collapse">
+                <thead>
+                  <tr className="bg-gray-700 text-white">
+                    <th className="px-2 py-2 text-left font-bold" style={{minWidth:'140px'}}>DIVISION</th>
+                    <th className="px-2 py-2 text-center font-bold bg-yellow-600" colSpan={2}>TARGET</th>
+                    <th className="px-2 py-2 text-center font-bold bg-blue-800" colSpan={2}>TTL PLAN</th>
+                    <th className="px-2 py-2 text-center font-bold bg-blue-600" colSpan={5}>TOTAL BEFORE OPENING</th>
+                    <th className="px-2 py-2 text-center font-bold bg-gray-600">NOTES</th>
+                  </tr>
+                  <tr className="bg-gray-200 text-gray-700 border-b-2 border-gray-400">
+                    <th className="px-2 py-1.5 text-left"></th>
+                    <th className="px-2 py-1.5 text-center bg-yellow-50">SKU Count</th>
+                    <th className="px-2 py-1.5 text-center bg-yellow-50">Units</th>
+                    <th className="px-2 py-1.5 text-center">SKU Count</th>
+                    <th className="px-2 py-1.5 text-center">%TTL SKU</th>
+                    <th className="px-2 py-1.5 text-center">SKU Count</th>
+                    <th className="px-2 py-1.5 text-center">Units</th>
+                    <th className="px-2 py-1.5 text-center">%TTL SKU</th>
+                    <th className="px-2 py-1.5 text-center">%TTL Units</th>
+                    <th className="px-2 py-1.5 text-center">Avg Depth</th>
+                    <th className="px-2 py-1.5 text-center"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {depthRows.rows.map((row, idx) => {
+                    const targetSku = parseInt(depthTargets[row.key]) || 0;
+                    const variance = targetSku ? row.skus - targetSku : null;
+                    const avgDepth = reservedLoaded && row.skus > 0 ? (row.units / row.skus).toFixed(0) : '—';
+                    const pctUnits = reservedLoaded && depthRows.totalUnits > 0 ? ((row.units / depthRows.totalUnits) * 100).toFixed(0) + '%' : '—';
+                    const displayUnits = reservedLoaded ? row.units : '—';
+
+                    return (
+                      <tr key={row.key} className={`border-b border-gray-200 ${row.isDivision ? 'bg-blue-50 font-bold' : 'hover:bg-gray-50'}`}>
+                        <td className={`px-2 py-1.5 ${row.isDivision ? 'font-bold text-gray-900' : 'pl-6 text-gray-700'}`}>
+                          {row.label}
+                        </td>
+                        <td className="px-1 py-1 text-center bg-yellow-50">
+                          {row.isDivision && (
+                            <input type="number" value={depthTargets[row.key] || ''} onChange={(e) => setDepthTargets(t => ({...t, [row.key]: e.target.value}))} className="w-14 px-1 py-0.5 border border-gray-300 rounded text-xs text-center" placeholder="—" />
+                          )}
+                        </td>
+                        <td className="px-1 py-1 text-center bg-yellow-50"></td>
+                        <td className={`px-2 py-1.5 text-center ${row.isDivision ? 'font-bold' : ''}`}>{row.skus}</td>
+                        <td className="px-2 py-1.5 text-center">{row.pctSku}</td>
+                        <td className={`px-2 py-1.5 text-center ${row.isDivision ? 'font-bold' : ''}`}>{row.skus}</td>
+                        <td className={`px-2 py-1.5 text-center ${row.isDivision ? 'font-bold' : ''}`}>{displayUnits}</td>
+                        <td className="px-2 py-1.5 text-center">{row.pctSku}</td>
+                        <td className="px-2 py-1.5 text-center">{pctUnits}</td>
+                        <td className="px-2 py-1.5 text-center">{avgDepth}</td>
+                        <td className="px-1 py-1 text-center">
+                          <input type="text" value={depthNotes[row.key] || ''} onChange={(e) => setDepthNotes(n => ({...n, [row.key]: e.target.value}))} className="w-full px-1 py-0.5 border border-gray-200 rounded text-xs" placeholder="" />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {/* TOTAL row */}
+                  <tr className="bg-gray-800 text-white font-bold border-t-2 border-gray-600">
+                    <td className="px-2 py-2">TOTAL</td>
+                    <td className="px-2 py-2 text-center">{depthRows.rows.filter(r => r.isDivision).reduce((s, r) => s + (parseInt(depthTargets[r.key]) || 0), 0) || '—'}</td>
+                    <td className="px-2 py-2 text-center"></td>
+                    <td className="px-2 py-2 text-center">{depthRows.totalSkus}</td>
+                    <td className="px-2 py-2 text-center">100%</td>
+                    <td className="px-2 py-2 text-center">{depthRows.totalSkus}</td>
+                    <td className="px-2 py-2 text-center">{reservedLoaded ? depthRows.totalUnits : '—'}</td>
+                    <td className="px-2 py-2 text-center">100%</td>
+                    <td className="px-2 py-2 text-center">{reservedLoaded ? '100%' : '—'}</td>
+                    <td className="px-2 py-2 text-center">{reservedLoaded && depthRows.totalSkus > 0 ? (depthRows.totalUnits / depthRows.totalSkus).toFixed(0) : '—'}</td>
+                    <td className="px-2 py-2 text-center"></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="flex justify-between pt-6 border-t border-gray-200">
+            <button
+              onClick={() => onPrev(4)}
+              className="px-6 py-2 bg-gray-400 text-white rounded-md font-semibold hover:bg-gray-500"
+            >
+              Previous
+            </button>
+            <button
+              onClick={() => onNext(6)}
+              className="px-6 py-2 bg-blue-600 text-white rounded-md font-semibold hover:bg-blue-700"
+            >
+              Next: The Checklist
+            </button>
+          </div>
+        </div>
+      );
+    };
+
+    // ============================================
+    // SHARED: CHECKLIST DATE COMPUTATION
+    // ============================================
+
+    const computeChecklistRows = (proFormaData) => {
+      const parseDate = (str) => {
+        if (!str) return null;
+        const s = String(str).trim();
+        if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return new Date(s + 'T12:00:00');
+        const parts = s.split('/');
+        if (parts.length === 3) { let [m,d,y] = parts.map(Number); if (y<100) y+=y<50?2000:1900; return new Date(y,m-1,d); }
+        return null;
+      };
+      const addDays = (date, days) => { if (!date) return null; const d = new Date(date); d.setDate(d.getDate() + days); return d; };
+      const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+      const fmtDate = (date) => { if (!date) return '—'; return dayNames[date.getDay()] + ' ' + (date.getMonth()+1) + '/' + date.getDate() + '/' + date.getFullYear(); };
+      const getFiscalQtr = (date) => { if (!date) return '—'; const m=date.getMonth(),y=date.getFullYear(); if(m>=1&&m<=3) return 'Q1 FY'+y; if(m>=4&&m<=6) return 'Q2 FY'+y; if(m>=7&&m<=9) return 'Q3 FY'+y; return m===0?'Q4 FY'+y:'Q4 FY'+(y+1); };
+      const getWeekNum = (date) => { if (!date) return '—'; const oneJan=new Date(date.getFullYear(),0,1); const days=Math.floor((date-oneJan)/86400000); return 'W'+Math.ceil((days+oneJan.getDay()+1)/7); };
+      const getAsstSeason = (date) => { if (!date) return '—'; const m=date.getMonth(); if(m>=1&&m<=3) return 'Spring'; if(m>=4&&m<=6) return 'Summer'; if(m>=7&&m<=9) return 'Fall'; return 'Holiday'; };
+
+      const openDate = parseDate(proFormaData.newStoreOpenDate || '');
+      const merchOverride = (proFormaData.dateOverrides || {}).merchDelivery || proFormaData.merchDeliveryDateOverride || '';
+      const merchDefault = addDays(openDate, -4);
+      const merchDate = merchOverride ? (parseDate(merchOverride) || merchDefault) : merchDefault;
+      const allocDrop = addDays(merchDate, -18);
+      const linesheetFinal = addDays(merchDate, -10);
+      const depthReview = addDays(allocDrop, -7);
+      const allocReserve = addDays(depthReview, -7);
+      const merchFinalReview = addDays(allocReserve, -7);
+      const merchPassOff = addDays(merchFinalReview, -7);
+      const skuCountAlignment = addDays(merchPassOff, -14);
+      const linesheetCreation = allocReserve;
+      const dateOverrides = proFormaData.dateOverrides || {};
+
+      const baseRows = [
+        { id: 'skuCountAlignment', label: 'SKU Count Alignment', calcDate: skuCountAlignment, hint: 'Merch Pass Off - 14 days' },
+        { id: 'merchPassOff', label: 'Merch Pass Off', calcDate: merchPassOff, hint: 'Final Review - 7 days' },
+        { id: 'merchFinalReview', label: 'Merch Final Review', calcDate: merchFinalReview, hint: 'Alloc Reserve - 7 days' },
+        { id: 'linesheetCreation', label: 'Linesheet Creation', calcDate: linesheetCreation, hint: 'Same as Alloc Reserve' },
+        { id: 'allocReserve', label: 'Allocation Reserve', calcDate: allocReserve, hint: 'Depth Review - 7 days' },
+        { id: 'depthReview', label: 'Depth Review', calcDate: depthReview, hint: 'Alloc Drop - 7 days' },
+        { id: 'allocDrop', label: 'Allocation Drop Date', calcDate: allocDrop, hint: 'Merch Delivery - 18 days' },
+        { id: 'linesheetFinal', label: 'Linesheet Creation - FINAL', calcDate: linesheetFinal, hint: 'Merch Delivery - 10 days' },
+        { id: 'merchDelivery', label: 'Merch Delivery Date', calcDate: merchDefault, hint: 'Opening - 4 days', highlight: true },
+        { id: 'openingDate', label: 'Opening Date', calcDate: openDate, hint: '', highlight: true },
+        { id: 'openingWeek', label: 'Opening Week', textValue: getWeekNum(openDate), hint: '', readonly: true },
+        { id: 'openingQtr', label: 'Opening Quarter', textValue: getFiscalQtr(openDate), hint: '', readonly: true },
+        { id: 'openingAsstQtr', label: 'Opening Asst Qtr', textValue: getAsstSeason(openDate), hint: '', readonly: true },
+      ];
+
+      // Merge custom rows
+      const customRows = proFormaData.customDateRows || [];
+      const rows = [...baseRows];
+      customRows.forEach((cr, ci) => {
+        const afterIdx = rows.findIndex(r => r.label === cr.afterLabel);
+        rows.splice(afterIdx >= 0 ? afterIdx + 1 : rows.length, 0, { id: 'custom_'+ci, label: cr.label, calcDate: parseDate(cr.date), hint: 'Custom', isCustom: true, customIdx: ci });
+      });
+
+      // Resolve display dates
+      rows.forEach(row => {
+        if (row.textValue) { row.displayDate = row.textValue; row.dateObj = null; return; }
+        const override = dateOverrides[row.id];
+        if (override) { const p = parseDate(override); row.displayDate = p ? fmtDate(p) : override; row.dateObj = p; row.hasOverride = true; return; }
+        if (row.isCustom) { const cr = customRows[row.customIdx]; if (cr?.date) { const p = parseDate(cr.date); row.displayDate = p ? fmtDate(p) : cr.date; row.dateObj = p; } else { row.displayDate = '—'; row.dateObj = null; } return; }
+        row.displayDate = row.calcDate ? fmtDate(row.calcDate) : '—';
+        row.dateObj = row.calcDate;
+      });
+
+      return { rows, baseRows, customRows, parseDate, fmtDate, dateOverrides };
+    };
+
+    // ============================================
+    // STEP 6: THE CHECKLIST
+    // ============================================
+
+    const Step6 = ({ onPrev, onDataChange, data }) => {
+      const { rows, baseRows, customRows, parseDate, fmtDate, dateOverrides } = computeChecklistRows(data.proFormaData || {});
+      const checklistComplete = data.proFormaData.checklistComplete || {};
+      const checklistNotes = data.proFormaData.checklistNotes || {};
+      const today = new Date(); today.setHours(0,0,0,0);
+
+      const handleDateEdit = (row, value) => {
+        if (row.isCustom) {
+          const updated = [...(data.proFormaData.customDateRows || [])];
+          updated[row.customIdx] = { ...updated[row.customIdx], date: value };
+          onDataChange({ ...data, proFormaData: { ...data.proFormaData, customDateRows: updated } });
+        } else if (row.id === 'openingDate') {
+          const parsed = parseDate(value);
+          const iso = parsed ? (parsed.getFullYear()+'-'+String(parsed.getMonth()+1).padStart(2,'0')+'-'+String(parsed.getDate()).padStart(2,'0')) : value;
+          onDataChange({ ...data, proFormaData: { ...data.proFormaData, newStoreOpenDate: iso } });
+        } else {
+          onDataChange({ ...data, proFormaData: { ...data.proFormaData, dateOverrides: { ...(data.proFormaData.dateOverrides||{}), [row.id]: value } } });
+        }
+      };
+
+      const toggleComplete = (id) => {
+        const updated = { ...checklistComplete, [id]: !checklistComplete[id] };
+        onDataChange({ ...data, proFormaData: { ...data.proFormaData, checklistComplete: updated } });
+      };
+
+      const updateNote = (id, value) => {
+        const updated = { ...checklistNotes, [id]: value };
+        onDataChange({ ...data, proFormaData: { ...data.proFormaData, checklistNotes: updated } });
+      };
+
+      const getEditValue = (row) => {
+        if (row.isCustom) return (data.proFormaData.customDateRows || [])[row.customIdx]?.date || '';
+        return dateOverrides[row.id] || (row.calcDate ? fmtDate(row.calcDate) : '');
+      };
+
+      const completedCount = rows.filter(r => checklistComplete[r.id]).length;
+
+      const handleExportChecklist = () => {
+        const exportData = rows.map(row => ({
+          'Status': checklistComplete[row.id] ? 'Complete' : (row.dateObj && row.dateObj < today && !row.readonly ? 'Overdue' : 'Pending'),
+          'Milestone': row.label,
+          'Date': row.displayDate || '—',
+          'Calculation': row.hint || '',
+          'Notes': checklistNotes[row.id] || '',
+        }));
+        const ws = XLSX.utils.json_to_sheet(exportData);
+        ws['!cols'] = [{ wch: 10 }, { wch: 28 }, { wch: 22 }, { wch: 24 }, { wch: 30 }];
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Checklist');
+        const storeName = (data.proFormaData?.newStoreName || 'NSO').replace(/[^a-zA-Z0-9]/g, '_');
+        XLSX.writeFile(wb, storeName + '_Checklist.xlsx');
+      };
+
+      return (
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-2xl font-bold text-gray-800">The Checklist</h2>
+              <p className="text-sm text-gray-500 mt-1">{completedCount} of {rows.length} milestones complete</p>
+            </div>
+            <div className="flex items-center gap-4">
+              <button onClick={handleExportChecklist} className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-semibold hover:bg-green-700">Export Excel</button>
+              <div className="w-48 bg-gray-200 rounded-full h-3">
+                <div className="bg-green-500 h-3 rounded-full transition-all" style={{width: (rows.length > 0 ? (completedCount/rows.length)*100 : 0) + '%'}}></div>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-lg shadow-md overflow-hidden">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="bg-gray-100 border-b-2 border-gray-300">
+                  <th className="px-3 py-2 text-center text-xs font-bold text-gray-600" style={{width:'40px'}}>Done</th>
+                  <th className="px-3 py-2 text-left text-xs font-bold text-gray-700" style={{width:'200px'}}>Milestone</th>
+                  <th className="px-3 py-2 text-left text-xs font-bold text-gray-700" style={{width:'180px'}}>Date</th>
+                  <th className="px-3 py-2 text-left text-xs font-bold text-gray-400" style={{width:'160px'}}>Calc</th>
+                  <th className="px-3 py-2 text-left text-xs font-bold text-gray-700">Notes</th>
+                  <th className="px-3 py-2 text-center text-xs font-bold text-gray-400" style={{width:'50px'}}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => {
+                  const isDone = !!checklistComplete[row.id];
+                  const isOverdue = !isDone && row.dateObj && row.dateObj < today && !row.readonly;
+                  const isEditing = (data.proFormaData._editingDateRow || '') === row.id;
+                  return (
+                    <tr key={row.id} className={`border-b border-gray-200 ${isDone ? 'bg-green-50 opacity-70' : isOverdue ? 'bg-red-50' : row.highlight ? 'bg-blue-50' : row.isCustom ? 'bg-yellow-50' : 'hover:bg-gray-50'}`}>
+                      <td className="px-3 py-2 text-center">
+                        {!row.readonly && (
+                          <input type="checkbox" checked={isDone} onChange={() => toggleComplete(row.id)} className="w-4 h-4 rounded cursor-pointer" />
+                        )}
+                      </td>
+                      <td className={`px-3 py-2 text-xs font-semibold ${isDone ? 'line-through text-gray-400' : isOverdue ? 'text-red-700' : 'text-gray-800'}`}>
+                        {row.isCustom && <span className="text-yellow-500 mr-1">●</span>}
+                        {isOverdue && <span className="text-red-500 mr-1">!</span>}
+                        {row.label}
+                      </td>
+                      <td className="px-3 py-2">
+                        {isEditing ? (
+                          <input type="text" value={getEditValue(row)} onChange={(e) => handleDateEdit(row, e.target.value)} onBlur={() => onDataChange({ ...data, proFormaData: { ...data.proFormaData, _editingDateRow: '' } })} onKeyDown={(e) => { if (e.key === 'Enter') onDataChange({ ...data, proFormaData: { ...data.proFormaData, _editingDateRow: '' } }); }} className="w-full px-2 py-1 border border-blue-400 rounded text-xs bg-white font-semibold" autoFocus />
+                        ) : (
+                          <span className={`text-xs ${isOverdue ? 'font-bold text-red-700' : isDone ? 'text-gray-400' : 'text-gray-700'}`}>{row.displayDate}</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-xs text-gray-400 italic">{row.hint}</td>
+                      <td className="px-3 py-2">
+                        <input type="text" value={checklistNotes[row.id] || ''} onChange={(e) => updateNote(row.id, e.target.value)} className="w-full px-2 py-1 border border-gray-200 rounded text-xs" placeholder="Notes..." />
+                      </td>
+                      <td className="px-3 py-2 text-center flex items-center justify-center gap-1">
+                        {!row.readonly && !isEditing && <button onClick={() => onDataChange({ ...data, proFormaData: { ...data.proFormaData, _editingDateRow: row.id } })} className="text-gray-400 hover:text-blue-600 text-xs px-1" title="Edit">&#9998;</button>}
+                        {row.isCustom && !isEditing && <button onClick={() => { const updated = (data.proFormaData.customDateRows||[]).filter((_,i) => i !== row.customIdx); onDataChange({ ...data, proFormaData: { ...data.proFormaData, customDateRows: updated } }); }} className="text-red-400 hover:text-red-600 text-xs px-1">✕</button>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Add Custom Milestone */}
+          <div className="bg-white rounded-lg shadow-md p-4">
+            <h4 className="text-sm font-bold text-gray-700 mb-3">Add Custom Milestone</h4>
+            <div className="flex items-end gap-3">
+              <div className="flex-1">
+                <label className="block text-xs text-gray-500 mb-1">Name</label>
+                <input type="text" id="checklistCustomName" className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs" placeholder="e.g. Fixture Install" />
+              </div>
+              <div style={{width:'160px'}}>
+                <label className="block text-xs text-gray-500 mb-1">Date</label>
+                <input type="text" id="checklistCustomDate" className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs" placeholder="MM/DD/YYYY" />
+              </div>
+              <div style={{width:'180px'}}>
+                <label className="block text-xs text-gray-500 mb-1">Insert after</label>
+                <select id="checklistCustomAfter" className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs">
+                  {baseRows.map(r => <option key={r.id} value={r.label}>{r.label}</option>)}
+                </select>
+              </div>
+              <button onClick={() => { const n=document.getElementById('checklistCustomName')?.value?.trim(); if(!n)return; const d=document.getElementById('checklistCustomDate')?.value?.trim()||''; const a=document.getElementById('checklistCustomAfter')?.value||''; const updated=[...(data.proFormaData.customDateRows||[]),{label:n,date:d,afterLabel:a}]; onDataChange({...data,proFormaData:{...data.proFormaData,customDateRows:updated}}); document.getElementById('checklistCustomName').value=''; document.getElementById('checklistCustomDate').value=''; }} className="px-4 py-1.5 bg-blue-600 text-white rounded text-xs font-semibold hover:bg-blue-700 whitespace-nowrap">+ Add</button>
+            </div>
+          </div>
+
+          <div className="flex justify-between pt-6 border-t border-gray-200">
+            <button onClick={() => onPrev(5)} className="px-6 py-2 bg-gray-400 text-white rounded-md font-semibold hover:bg-gray-500">Previous</button>
+            <div className="text-green-600 font-bold text-lg">{completedCount === rows.length && rows.length > 0 ? 'All Milestones Complete!' : ''}</div>
+          </div>
+        </div>
+      );
+    };
+
+    // ============================================
+    // STORAGE HELPERS (localStorage for standalone HTML)
+    // ============================================
+
+    const STORAGE_KEY = 'faherty_nso_projects';
+
+    const loadAllProjects = () => {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        return raw ? JSON.parse(raw) : [];
+      } catch { return []; }
+    };
+
+    const saveAllProjects = (projects) => {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
+      } catch (e) {
+        console.error('Storage save failed:', e);
+      }
+    };
+
+    const saveProject = (projectId, appData) => {
+      const projects = loadAllProjects();
+      const storeName = appData.proFormaData?.newStoreName || 'Unnamed Store';
+      const now = new Date().toISOString();
+      const idx = projects.findIndex(p => p.id === projectId);
+
+      // Build a saveable copy (strip very large data to manage storage limits)
+      // PST data can be huge (1800+ rows) — we save it but warn if storage is tight
+      const saveData = {
+        id: projectId,
+        storeName: storeName,
+        status: getProjectStatus(appData),
+        createdAt: idx >= 0 ? projects[idx].createdAt : now,
+        updatedAt: now,
+        appData: appData,
+      };
+
+      if (idx >= 0) {
+        projects[idx] = saveData;
+      } else {
+        projects.push(saveData);
+      }
+      saveAllProjects(projects);
+      return saveData;
+    };
+
+    const deleteProject = (projectId) => {
+      const projects = loadAllProjects().filter(p => p.id !== projectId);
+      saveAllProjects(projects);
+    };
+
+    const getProjectStatus = (appData) => {
+      if (!appData) return 'Not Started';
+      const s1 = appData.step1Complete;
+      const s2 = appData.step2Complete;
+      const s3 = appData.step3Complete;
+      const hasSKUs = (appData.pstData || []).length > 0;
+      const hasSignoffs = appData.divisionSignoffs && Object.keys(appData.divisionSignoffs).length > 0;
+      if (hasSignoffs) return 'Review Complete';
+      if (hasSKUs && s3) return 'Assortment Ready';
+      if (s2) return 'Tiering Done';
+      if (s1) return 'Store Setup Done';
+      return 'In Progress';
+    };
+
+    const generateId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+
+    const makeBlankAppData = () => ({
+      proFormaData: {
+        newStoreName: '', newStoreOpenDate: '', newStoreRegion: '', newStoreArea: '',
+        newStoreVibe: '', newStoreGrossSqft: '', newStoreSellingSquareFeet: '', newStoreRent: '',
+        newStoreNetSales: '', newStoreGM: '', newStoreEBITDA: '', newStoreTraffic: '',
+        newStoreCVR: '', newStoreAOV: '', newStoreSalesPerSqft: '', newStorePayback: '',
+        compStoreName: '', compStoreOpenDate: '', compStoreRegion: '', compStoreArea: '',
+        compStoreGrossSqft: '', compStoreSellingSquareFeet: '', compStoreRent: '',
+        compStoreNetSales: '', compStoreGM: '', compStoreEBITDA: '', compStoreTraffic: '',
+        compStoreCVR: '', compStoreAOV: '', compStoreSalesPerSqft: '', compStorePayback: '',
+        compStoreAnalysis: [],
+        divMix: {},
+      },
+      storeTieringData: {
+        allStores: [], mensData: [], womensData: [], nonApparel: [],
+        kidsData: [], storeGroups: [], storeMatrix: {}, totalRollup: [],
+      },
+      pstData: [], selectedDeliveries: [], selectedGroups: [],
+      skuActions: {}, assignedTiers: {}, simStore: '', skuTargets: {},
+      step1Complete: false, step2Complete: false, step3Complete: false,
+    });
+
+    // ============================================
+    // DASHBOARD COMPONENT
+    // ============================================
+
+    const Dashboard = ({ onOpenProject, onNewProject }) => {
+      const [projects, setProjects] = useState(loadAllProjects());
+      const [search, setSearch] = useState('');
+      const [confirmDelete, setConfirmDelete] = useState(null);
+
+      const filtered = projects.filter(p =>
+        !search || p.storeName.toLowerCase().includes(search.toLowerCase())
+      ).sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+
+      // Split into active vs archived (opening date has passed = archived)
+      const today = new Date(); today.setHours(0,0,0,0);
+      const parseOpenDate = (p) => {
+        const s = p.appData?.proFormaData?.newStoreOpenDate || '';
+        if (!s) return null;
+        if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return new Date(s + 'T12:00:00');
+        const parts = String(s).split('/');
+        if (parts.length === 3) { let [m,d,y] = parts.map(Number); if(y<100)y+=y<50?2000:1900; return new Date(y,m-1,d); }
+        return null;
+      };
+      const activeProjects = filtered.filter(p => { const d = parseOpenDate(p); return !d || d >= today; });
+      const archivedProjects = filtered.filter(p => { const d = parseOpenDate(p); return d && d < today; });
+      const [showArchived, setShowArchived] = useState(false);
+
+      const handleDelete = (id) => {
+        deleteProject(id);
+        setProjects(loadAllProjects());
+        setConfirmDelete(null);
+      };
+
+      const handleDuplicate = (project) => {
+        const newId = generateId();
+        const dupData = JSON.parse(JSON.stringify(project.appData));
+        dupData.proFormaData.newStoreName = project.storeName + ' (Copy)';
+        dupData.divisionSignoffs = {};
+        saveProject(newId, dupData);
+        setProjects(loadAllProjects());
+      };
+
+      const statusColor = (status) => {
+        switch(status) {
+          case 'Review Complete': return 'bg-green-100 text-green-800 border-green-200';
+          case 'Assortment Ready': return 'bg-blue-100 text-blue-800 border-blue-200';
+          case 'Tiering Done': return 'bg-purple-100 text-purple-800 border-purple-200';
+          case 'Store Setup Done': return 'bg-yellow-100 text-yellow-800 border-yellow-200';
+          default: return 'bg-gray-100 text-gray-600 border-gray-200';
+        }
+      };
+
+      const formatDate = (iso) => {
+        if (!iso) return '—';
+        const d = new Date(iso);
+        return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) + ' ' +
+               d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+      };
+
+      return (
+        <div className="min-h-screen bg-gray-100">
+          {/* Header */}
+          <div className="bg-gray-900 text-white">
+            <div className="max-w-6xl mx-auto px-8 py-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h1 className="text-2xl font-bold tracking-tight">Faherty NSO Assortment Tool</h1>
+                  <p className="text-gray-400 text-sm mt-1">New Store Opening — Assortment Planning</p>
+                </div>
+                <button
+                  onClick={onNewProject}
+                  className="px-5 py-2.5 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition flex items-center gap-2"
+                >
+                  <span className="text-lg leading-none">+</span> New Store Project
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Content */}
+          <div className="max-w-6xl mx-auto px-8 py-8">
+            {/* Search & Stats */}
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-4">
+                <input
+                  type="text"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search stores..."
+                  className="px-4 py-2 border border-gray-300 rounded-lg text-sm w-64 focus:outline-none focus:border-blue-400"
+                />
+                <span className="text-sm text-gray-500">{activeProjects.length} active{archivedProjects.length > 0 ? (' · ' + archivedProjects.length + ' archived') : ''}</span>
+              </div>
+            </div>
+
+            {filtered.length === 0 ? (
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-16 text-center">
+                <div className="text-5xl mb-4">🏪</div>
+                <h2 className="text-xl font-bold text-gray-800 mb-2">
+                  {projects.length === 0 ? 'No Store Projects Yet' : 'No Matches'}
+                </h2>
+                <p className="text-gray-500 mb-6">
+                  {projects.length === 0
+                    ? 'Create your first NSO project to get started.'
+                    : 'No projects match your search.'}
+                </p>
+                {projects.length === 0 && (
+                  <button onClick={onNewProject} className="px-5 py-2.5 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700">
+                    + Create First Project
+                  </button>
+                )}
+              </div>
+            ) : (
+              <Fragment>
+              {/* Active Projects */}
+              {activeProjects.length > 0 && (
+                <div className="space-y-2">
+                  {activeProjects.map(project => (
+                    <div key={project.id} className="bg-white rounded-xl shadow-sm border border-gray-200 hover:shadow-md hover:border-gray-300 transition cursor-pointer">
+                    <div className="flex items-center px-6 py-4">
+                      {/* Store Name & Status */}
+                      <div className="flex-1 min-w-0" onClick={() => onOpenProject(project.id)}>
+                        <div className="flex items-center gap-3 mb-1">
+                          <h3 className="text-lg font-bold text-gray-900 truncate">{project.storeName || 'Unnamed Store'}</h3>
+                          <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold border ${statusColor(project.status)}`}>
+                            {project.status}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-4 text-xs text-gray-500">
+                          <span>Created: {formatDate(project.createdAt)}</span>
+                          <span>·</span>
+                          <span>Last saved: {formatDate(project.updatedAt)}</span>
+                          {project.appData?.pstData?.length > 0 && (
+                            <Fragment>
+                              <span>·</span>
+                              <span className="font-semibold text-gray-700">{project.appData.pstData.length} PST SKUs</span>
+                            </Fragment>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Actions */}
+                      <div className="flex items-center gap-2 ml-4">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); onOpenProject(project.id); }}
+                          className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700"
+                        >
+                          Open
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleDuplicate(project); }}
+                          className="px-3 py-2 bg-gray-100 text-gray-600 rounded-lg text-sm font-semibold hover:bg-gray-200"
+                          title="Duplicate"
+                        >
+                          ⧉
+                        </button>
+                        {confirmDelete === project.id ? (
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleDelete(project.id); }}
+                              className="px-3 py-2 bg-red-600 text-white rounded-lg text-xs font-bold hover:bg-red-700"
+                            >
+                              Confirm
+                            </button>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setConfirmDelete(null); }}
+                              className="px-3 py-2 bg-gray-200 text-gray-700 rounded-lg text-xs font-bold hover:bg-gray-300"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setConfirmDelete(project.id); }}
+                            className="px-3 py-2 bg-gray-100 text-red-500 rounded-lg text-sm font-semibold hover:bg-red-50"
+                            title="Delete"
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              )}
+
+              {/* Archived Projects (opened stores) */}
+              {archivedProjects.length > 0 && (
+                <div className="mt-6">
+                  <button onClick={() => setShowArchived(!showArchived)} className="flex items-center gap-2 text-sm font-semibold text-gray-500 hover:text-gray-700 mb-2">
+                    <span className="text-xs">{showArchived ? '▼' : '▶'}</span>
+                    Archived — {archivedProjects.length} opened store{archivedProjects.length !== 1 ? 's' : ''}
+                  </button>
+                  {showArchived && (
+                    <div className="space-y-2 opacity-75">
+                      {archivedProjects.map(project => (
+                        <div key={project.id} className="bg-gray-50 rounded-xl shadow-sm border border-gray-200 hover:shadow-md transition cursor-pointer">
+                          <div className="flex items-center px-6 py-3">
+                            <div className="flex-1 min-w-0" onClick={() => onOpenProject(project.id)}>
+                              <div className="flex items-center gap-3 mb-1">
+                                <h3 className="text-base font-bold text-gray-600 truncate">{project.storeName || 'Unnamed Store'}</h3>
+                                <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-gray-200 text-gray-600 border border-gray-300">Opened</span>
+                              </div>
+                              <div className="text-xs text-gray-400">Last saved: {formatDate(project.updatedAt)}</div>
+                            </div>
+                            <button onClick={(e) => { e.stopPropagation(); onOpenProject(project.id); }} className="px-3 py-1.5 bg-gray-200 text-gray-600 rounded-lg text-xs font-semibold hover:bg-gray-300">Open</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              </Fragment>
+            )}
+
+            {/* Aggregated Checklist — Gantt-style view (active projects only) */}
+            {activeProjects.length > 0 && (
+              <div className="mt-10">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-bold text-gray-800">Checklist Overview</h3>
+                  <button onClick={() => {
+                    const mIds = ['skuCountAlignment','merchPassOff','merchFinalReview','linesheetCreation','allocReserve','depthReview','allocDrop','linesheetFinal','merchDelivery','openingDate'];
+                    const mLabels = { skuCountAlignment:'SKU Count Alignment', merchPassOff:'Merch Pass Off', merchFinalReview:'Merch Final Review', linesheetCreation:'Linesheet Creation', allocReserve:'Allocation Reserve', depthReview:'Depth Review', allocDrop:'Allocation Drop Date', linesheetFinal:'Linesheet Creation - FINAL', merchDelivery:'Merch Delivery Date', openingDate:'Opening Date' };
+                    const td = new Date(); td.setHours(0,0,0,0);
+                    const exportRows = [];
+                    mIds.forEach(id => {
+                      const row = { Milestone: mLabels[id] };
+                      activeProjects.forEach(project => {
+                        const pf = project.appData?.proFormaData || {};
+                        const { rows } = computeChecklistRows(pf);
+                        const cc = pf.checklistComplete || {};
+                        const r = rows.find(x => x.id === id);
+                        const done = !!cc[id];
+                        const overdue = !done && r?.dateObj && r.dateObj < td;
+                        const dateStr = r?.dateObj ? ((r.dateObj.getMonth()+1)+'/'+r.dateObj.getDate()+'/'+r.dateObj.getFullYear()) : '—';
+                        const name = project.storeName || 'Unnamed';
+                        row[name] = (done ? '✓ ' : overdue ? '! ' : '') + dateStr;
+                      });
+                      exportRows.push(row);
+                    });
+                    const ws = XLSX.utils.json_to_sheet(exportRows);
+                    const wb = XLSX.utils.book_new();
+                    XLSX.utils.book_append_sheet(wb, ws, 'All Checklists');
+                    XLSX.writeFile(wb, 'NSO_Checklist_Overview.xlsx');
+                  }} className="px-4 py-1.5 bg-green-600 text-white rounded-lg text-xs font-semibold hover:bg-green-700">Export Excel</button>
+                </div>
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-x-auto">
+                  {(() => {
+                    const mIds = ['skuCountAlignment','merchPassOff','merchFinalReview','linesheetCreation','allocReserve','depthReview','allocDrop','linesheetFinal','merchDelivery','openingDate'];
+                    const mLabels = { skuCountAlignment:'SKU Count Alignment', merchPassOff:'Merch Pass Off', merchFinalReview:'Merch Final Review', linesheetCreation:'Linesheet Creation', allocReserve:'Allocation Reserve', depthReview:'Depth Review', allocDrop:'Allocation Drop Date', linesheetFinal:'Linesheet Creation - FINAL', merchDelivery:'Merch Delivery Date', openingDate:'Opening Date' };
+                    const td = new Date(); td.setHours(0,0,0,0);
+
+                    const handleAggToggle = (projectId, milestoneId) => {
+                      const all = loadAllProjects();
+                      const p = all.find(x => x.id === projectId);
+                      if (!p?.appData?.proFormaData) return;
+                      const cc = p.appData.proFormaData.checklistComplete || {};
+                      cc[milestoneId] = !cc[milestoneId];
+                      p.appData.proFormaData.checklistComplete = cc;
+                      saveAllProjects(all);
+                      setProjects(loadAllProjects());
+                    };
+
+                    return (
+                      <table className="text-xs border-collapse">
+                        <thead>
+                          <tr className="bg-gray-100 border-b-2 border-gray-300">
+                            <th className="px-2 py-1.5 text-left font-bold text-gray-700 sticky left-0 bg-gray-100 z-10" style={{width:'200px',minWidth:'200px'}}>Milestone</th>
+                            {activeProjects.map(project => (
+                              <th key={project.id} className="px-2 py-1.5 text-center font-bold text-gray-700 cursor-pointer hover:text-blue-600 whitespace-nowrap" onClick={() => onOpenProject(project.id)}>
+                                <div className="text-xs">{project.storeName || 'New'}</div>
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {mIds.map(id => {
+                            return (
+                              <tr key={id} className="border-b border-gray-200 hover:bg-gray-50">
+                                <td className="px-2 py-1.5 font-semibold text-gray-800 sticky left-0 bg-white z-10 text-xs whitespace-nowrap">{mLabels[id]}</td>
+                                {activeProjects.map(project => {
+                                  const pf = project.appData?.proFormaData || {};
+                                  const { rows } = computeChecklistRows(pf);
+                                  const cc = pf.checklistComplete || {};
+                                  const row = rows.find(r => r.id === id);
+                                  const done = !!cc[id];
+                                  const overdue = !done && row?.dateObj && row.dateObj < td;
+                                  const short = row?.dateObj ? ((row.dateObj.getMonth()+1)+'/'+row.dateObj.getDate()) : '—';
+                                  return (
+                                    <td key={project.id} className={`px-1 py-1 text-center ${done ? 'bg-green-50' : overdue ? 'bg-red-50' : ''}`}>
+                                      <div className="flex flex-col items-center">
+                                        <input type="checkbox" checked={done} onChange={() => handleAggToggle(project.id, id)} className="w-3 h-3 cursor-pointer" />
+                                        <span className={`text-xs leading-tight ${done ? 'text-green-600 line-through' : overdue ? 'text-red-600 font-bold' : 'text-gray-500'}`}>{short}</span>
+                                      </div>
+                                    </td>
+                                  );
+                                })}
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    );
+                  })()}
+                </div>
+                <p className="text-xs text-gray-400 mt-2">Red = overdue · Green = complete · Click store name to open project checklist</p>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    };
+
+    // ============================================
+    // MAIN APP COMPONENT (with Dashboard + Save)
+    // ============================================
+
+    const App = () => {
+      const [view, setView] = useState('dashboard'); // 'dashboard' or 'project'
+      const [activeProjectId, setActiveProjectId] = useState(null);
+      const [currentStep, setCurrentStep] = useState(1);
+      const [saveStatus, setSaveStatus] = useState(''); // '', 'saving', 'saved'
+      const [appData, setAppData] = useState(makeBlankAppData());
+
+      const handleOpenProject = (projectId) => {
+        const projects = loadAllProjects();
+        const project = projects.find(p => p.id === projectId);
+        if (project && project.appData) {
+          setAppData(project.appData);
+          setActiveProjectId(projectId);
+          setCurrentStep(1);
+          setView('project');
+        }
+      };
+
+      const handleNewProject = () => {
+        const newId = generateId();
+        const blank = makeBlankAppData();
+        setAppData(blank);
+        setActiveProjectId(newId);
+        setCurrentStep(1);
+        setView('project');
+      };
+
+      const handleBackToDashboard = () => {
+        // Auto-save before going back
+        if (activeProjectId) {
+          doSave();
+        }
+        setView('dashboard');
+        setActiveProjectId(null);
+      };
+
+      const doSave = useCallback(() => {
+        if (!activeProjectId) return;
+        setSaveStatus('saving');
+        try {
+          saveProject(activeProjectId, appData);
+          setSaveStatus('saved');
+          setTimeout(() => setSaveStatus(''), 2500);
+        } catch(e) {
+          setSaveStatus('error');
+          console.error('Save failed:', e);
+          setTimeout(() => setSaveStatus(''), 3000);
+        }
+      }, [activeProjectId, appData]);
+
+      const handleNext = (step) => {
+        setCurrentStep(step);
+        window.scrollTo(0, 0);
+      };
+
+      const handlePrev = (step) => {
+        setCurrentStep(step);
+        window.scrollTo(0, 0);
+      };
+
+      const handleDataChange = (newData) => {
+        setAppData(newData);
+      };
+
+      // Auto-save when moving between steps
+      const handleNextWithSave = (step) => {
+        handleNext(step);
+        if (activeProjectId) {
+          setTimeout(() => doSave(), 100);
+        }
+      };
+
+      const getStepStatus = (step) => {
+        if (step === 1) return appData.step1Complete;
+        if (step === 2) return appData.step2Complete;
+        if (step === 3) return appData.step3Complete;
+        return false;
+      };
+
+      // Dashboard view
+      if (view === 'dashboard') {
+        return <Dashboard onOpenProject={handleOpenProject} onNewProject={handleNewProject} />;
+      }
+
+      // Project view
+      const storeName = appData.proFormaData?.newStoreName || 'New Store';
+
+      return (
+        <div className="flex min-h-screen bg-gray-100">
+          {/* Sidebar */}
+          <div className="w-64 bg-gray-900 text-white p-6 fixed h-full overflow-y-auto flex flex-col">
+            <h1 className="text-lg font-bold mb-2">Faherty NSO Tool</h1>
+
+            {/* Back to Dashboard */}
+            <button
+              onClick={handleBackToDashboard}
+              className="w-full text-left px-3 py-2 rounded-lg text-xs text-gray-400 hover:text-white hover:bg-gray-800 transition mb-2 flex items-center gap-2"
+            >
+              ← All Projects
+            </button>
+
+            {/* Active Store Name */}
+            <div className="px-3 py-2 mb-4 bg-gray-800 rounded-lg border border-gray-700">
+              <div className="text-xs text-gray-500 uppercase tracking-wide mb-0.5">Active Store</div>
+              <div className="text-sm font-semibold truncate" title={storeName}>{storeName}</div>
+            </div>
+
+            <nav className="space-y-2 flex-1">
+              {[
+                { num: 1, label: 'Store Setup' },
+                { num: 2, label: 'Tiering & Groups' },
+                { num: 3, label: 'Deliveries' },
+                { num: 4, label: 'Assortment Review' },
+                { num: 5, label: 'Depth Review' },
+                { num: 6, label: 'The Checklist' },
+              ].map(({ num, label }) => (
+                <button
+                  key={num}
+                  onClick={() => handleNext(num)}
+                  className={`w-full text-left px-4 py-3 rounded-lg transition ${
+                    currentStep === num
+                      ? 'bg-blue-600 text-white font-bold'
+                      : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm">{num}. {label}</span>
+                    {getStepStatus(num) && <span className="text-green-400">✓</span>}
+                  </div>
+                </button>
+              ))}
+            </nav>
+
+            {/* Save Button at Bottom */}
+            <div className="mt-4 pt-4 border-t border-gray-700 space-y-2">
+              <button
+                onClick={doSave}
+                className={`w-full px-4 py-3 rounded-lg font-bold text-sm transition ${
+                  saveStatus === 'saved'
+                    ? 'bg-green-600 text-white'
+                    : saveStatus === 'saving'
+                    ? 'bg-yellow-600 text-white'
+                    : saveStatus === 'error'
+                    ? 'bg-red-600 text-white'
+                    : 'bg-blue-600 text-white hover:bg-blue-700'
+                }`}
+              >
+                {saveStatus === 'saved' ? '✓ Saved!' :
+                 saveStatus === 'saving' ? 'Saving...' :
+                 saveStatus === 'error' ? '✕ Save Failed' :
+                 '💾 Save Store'}
+              </button>
+              <div className="text-xs text-gray-500 text-center">
+                {(() => {
+                  const projects = loadAllProjects();
+                  const p = projects.find(p => p.id === activeProjectId);
+                  if (p?.updatedAt) {
+                    const d = new Date(p.updatedAt);
+                    return 'Last saved: ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+                  }
+                  return 'Not saved yet';
+                })()}
+              </div>
+            </div>
+          </div>
+
+          {/* Main Content */}
+          <div className="ml-64 flex-1 p-8">
+            <div className="max-w-6xl mx-auto">
+              {currentStep === 1 && <Step1 onNext={handleNextWithSave} onDataChange={handleDataChange} data={appData} />}
+              {currentStep === 2 && <Step2 onNext={handleNextWithSave} onPrev={handlePrev} onDataChange={handleDataChange} data={appData} />}
+              {currentStep === 3 && <Step3 onNext={handleNextWithSave} onPrev={handlePrev} onDataChange={handleDataChange} data={appData} />}
+              {currentStep === 4 && <Step4 onNext={handleNextWithSave} onPrev={handlePrev} onDataChange={handleDataChange} data={appData} />}
+              {currentStep === 5 && <Step5 onNext={handleNextWithSave} onPrev={handlePrev} data={appData} />}
+              {currentStep === 6 && <Step6 onPrev={handlePrev} onDataChange={handleDataChange} data={appData} />}
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
