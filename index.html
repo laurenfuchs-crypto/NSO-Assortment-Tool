@@ -2838,8 +2838,11 @@
     const SCRIPT_URL_KEY = 'faherty_nso_script_url';
     const CACHE_KEY = 'faherty_nso_cache';
 
-    const getScriptUrl = () => localStorage.getItem(SCRIPT_URL_KEY) || '';
-    const setScriptUrl = (url) => localStorage.setItem(SCRIPT_URL_KEY, url);
+    // Hardcoded Apps Script URL — no setup needed
+    const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwDAAyeqEtLYx466vXahjRZEOPT-d26EkES1NMWmwBy99UdsT07RZxZCCv7urUsqWMF/exec';
+
+    const getScriptUrl = () => SCRIPT_URL;
+    const setScriptUrl = (url) => {}; // no-op, URL is hardcoded
 
     // Local cache for instant rendering
     const loadAllProjects = () => {
@@ -3062,14 +3065,10 @@
                   <h1 className="text-2xl font-bold tracking-tight">Faherty NSO Assortment Tool</h1>
                   <div className="flex items-center gap-3 mt-1">
                     <p className="text-gray-400 text-sm">New Store Opening — Assortment Planning</p>
-                    {getScriptUrl() ? (
-                      <span className="flex items-center gap-1 text-xs text-green-400">
+                    <span className="flex items-center gap-1 text-xs text-green-400">
                         <span className="w-1.5 h-1.5 bg-green-400 rounded-full"></span>
                         {syncing ? 'Syncing...' : 'Connected'}
                       </span>
-                    ) : (
-                      <button onClick={() => onNewProject('setup')} className="text-xs text-yellow-400 hover:text-yellow-300">Connect to Google Sheets →</button>
-                    )}
                   </div>
                 </div>
                 <button
@@ -3323,66 +3322,12 @@
     // ============================================
 
     const App = () => {
-      const [view, setView] = useState(getScriptUrl() ? 'dashboard' : 'setup');
+      const [view, setView] = useState('dashboard');
       const [activeProjectId, setActiveProjectId] = useState(null);
       const [currentStep, setCurrentStep] = useState(1);
       const [saveStatus, setSaveStatus] = useState('');
       const [appData, setAppData] = useState(makeBlankAppData());
 
-      // Setup screen — only shows once
-      if (view === 'setup') {
-        const SetupScreen = () => {
-          const [url, setUrl] = useState(getScriptUrl());
-          const [status, setStatus] = useState('');
-
-          const handleConnect = async () => {
-            if (!url.trim()) { setStatus('error: Please paste the Apps Script URL'); return; }
-            setStatus('testing');
-            try {
-              const json = await appsFetch(url.trim() + '?action=ping');
-              if (json.success) {
-                setScriptUrl(url.trim());
-                setStatus('success');
-                await remoteLoadAll();
-                setTimeout(() => setView('dashboard'), 1000);
-              } else {
-                setStatus('error: ' + (json.error || 'Unknown error'));
-              }
-            } catch (e) {
-              setStatus('error: Could not connect — ' + e.message);
-            }
-          };
-
-          return (
-            <div className="min-h-screen bg-gray-100 flex items-center justify-center p-8">
-              <div className="bg-white rounded-xl shadow-lg p-8 w-full max-w-lg">
-                <div className="text-center mb-6">
-                  <h1 className="text-2xl font-bold text-gray-800">Faherty NSO Tool</h1>
-                  <p className="text-sm text-gray-500 mt-2">One-time setup — paste your Apps Script URL to connect</p>
-                </div>
-
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-semibold text-gray-700 mb-1">Apps Script Web App URL</label>
-                    <input type="text" value={url} onChange={(e) => setUrl(e.target.value)} className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm" placeholder="https://script.google.com/macros/s/.../exec" />
-                    <p className="text-xs text-gray-400 mt-1">From your Google Sheet → Extensions → Apps Script → Deploy</p>
-                  </div>
-                  <button onClick={handleConnect} className="w-full px-5 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700">
-                    {status === 'testing' ? 'Connecting...' : 'Connect'}
-                  </button>
-                  {status === 'success' && <p className="text-sm text-green-600 font-semibold text-center">Connected! Loading dashboard...</p>}
-                  {status.startsWith('error') && <p className="text-sm text-red-600 text-center">{status.replace('error: ', '')}</p>}
-                </div>
-
-                <div className="mt-6 pt-4 border-t border-gray-200 text-center">
-                  <button onClick={() => setView('dashboard')} className="text-sm text-gray-400 hover:text-gray-600">Skip — use offline mode</button>
-                </div>
-              </div>
-            </div>
-          );
-        };
-        return <SetupScreen />;
-      }
 
       const handleOpenProject = (projectId) => {
         const projects = loadAllProjects();
