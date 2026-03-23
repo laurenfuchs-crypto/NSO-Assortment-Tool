@@ -2852,36 +2852,42 @@
       try { localStorage.setItem(CACHE_KEY, JSON.stringify(projects)); } catch {}
     };
 
-    // Helper: fetch from Apps Script (handles Google's redirect)
+    // Helper: fetch from Apps Script (tries JSONP first, then regular fetch)
     const appsFetch = (url) => {
       return new Promise((resolve, reject) => {
+        // Try JSONP first (works across domains with Google auth)
         const callbackName = '_nso_cb_' + Date.now() + Math.random().toString(36).slice(2);
         const separator = url.includes('?') ? '&' : '?';
         const scriptUrl = url + separator + 'callback=' + callbackName;
+        let resolved = false;
         
         window[callbackName] = (data) => {
+          resolved = true;
           delete window[callbackName];
-          document.head.removeChild(script);
+          try { document.head.removeChild(script); } catch(e) {}
           resolve(data);
         };
         
         const script = document.createElement('script');
         script.src = scriptUrl;
         script.onerror = () => {
+          if (resolved) return;
           delete window[callbackName];
-          document.head.removeChild(script);
-          reject(new Error('Script load failed'));
+          try { document.head.removeChild(script); } catch(e) {}
+          // Fall back to regular fetch
+          fetch(url).then(r => r.json()).then(resolve).catch(reject);
         };
         document.head.appendChild(script);
         
-        // Timeout after 15 seconds
+        // Timeout — try fetch fallback
         setTimeout(() => {
-          if (window[callbackName]) {
+          if (!resolved && window[callbackName]) {
             delete window[callbackName];
             try { document.head.removeChild(script); } catch(e) {}
-            reject(new Error('Request timed out'));
+            // Fall back to regular fetch
+            fetch(url).then(r => r.json()).then(resolve).catch(reject);
           }
-        }, 15000);
+        }, 8000);
       });
     };
 
