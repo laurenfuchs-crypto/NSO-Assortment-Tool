@@ -3463,7 +3463,10 @@
                       const cc = p.appData.proFormaData.checklistComplete || {};
                       cc[milestoneId] = !cc[milestoneId];
                       p.appData.proFormaData.checklistComplete = cc;
+                      p.updatedAt = new Date().toISOString();
+                      p.status = getProjectStatus(p.appData);
                       saveAllProjects(all);
+                      remoteSave(p);
                       setProjects(loadAllProjects());
                     };
 
