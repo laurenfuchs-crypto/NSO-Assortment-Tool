@@ -3546,14 +3546,19 @@
       const [isLocked, setIsLocked] = useState(false);
       const lockIntervalRef = useRef(null);
 
-      // Ask for name on first visit
-      if (!userName && view !== 'dashboard') {
-        const name = prompt('Enter your name (for edit tracking):');
-        if (name) {
-          localStorage.setItem('faherty_nso_username', name.trim());
-          setUserName(name.trim());
+      // Get or ask for user name
+      const getUserName = () => {
+        let name = userName || localStorage.getItem('faherty_nso_username') || '';
+        if (!name) {
+          name = prompt('Enter your name (for edit tracking):');
+          if (name) {
+            name = name.trim();
+            localStorage.setItem('faherty_nso_username', name);
+            setUserName(name);
+          }
         }
-      }
+        return name;
+      };
 
       // Acquire lock when opening a project
       const acquireLock = async (projectId) => {
@@ -3612,6 +3617,7 @@
       };
 
       const handleOpenProject = (projectId) => {
+        getUserName();
         const projects = loadAllProjects();
         const project = projects.find(p => p.id === projectId);
         if (project && project.appData) {
@@ -3626,6 +3632,7 @@
       };
 
       const handleNewProject = () => {
+        getUserName();
         const newId = generateId();
         const blank = makeBlankAppData();
         setAppData(blank);
