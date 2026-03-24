@@ -3092,22 +3092,55 @@
       try {
         const json = await appsFetch(url + '?action=loadAll');
         if (json.success && json.projects) {
-          saveAllProjects(json.projects);
-          return json.projects;
+          // Merge: for each project, keep whichever version is newer (local or remote)
+          const local = loadAllProjects();
+          const merged = [];
+          const allIds = new Set();
+
+          // Build lookup of local projects by ID
+          const localMap = {};
+          local.forEach(p => { if (p.id) { localMap[p.id] = p; allIds.add(p.id); } });
+
+          // Build lookup of remote projects by ID
+          const remoteMap = {};
+          json.projects.forEach(p => { if (p.id) { remoteMap[p.id] = p; allIds.add(p.id); } });
+
+          // For each project, keep the newer one
+          allIds.forEach(id => {
+            const l = localMap[id];
+            const r = remoteMap[id];
+            if (l && r) {
+              const lTime = new Date(l.updatedAt || 0).getTime();
+              const rTime = new Date(r.updatedAt || 0).getTime();
+              merged.push(lTime >= rTime ? l : r);
+            } else if (l) {
+              merged.push(l);
+            } else if (r) {
+              merged.push(r);
+            }
+          });
+
+          saveAllProjects(merged);
+          return merged;
         }
         return null;
       } catch (e) { console.error('Remote load error:', e); return null; }
     };
 
-    // Remote: save project to Google Sheet (POST via hidden form)
+    // Remote: save project to Google Sheet
     const remoteSave = async (projectData) => {
       const url = getScriptUrl();
       if (!url) return;
       try {
         const body = JSON.stringify({ action: 'save', project: projectData });
-        // Use navigator.sendBeacon for fire-and-forget POST
-        const blob = new Blob([body], { type: 'text/plain' });
-        navigator.sendBeacon(url, blob);
+        // Try fetch first (more reliable), fall back to sendBeacon
+        try {
+          await fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: body, mode: 'no-cors' });
+        } catch(e) {
+          // Fallback to sendBeacon
+          const blob = new Blob([body], { type: 'text/plain' });
+          navigator.sendBeacon(url, blob);
+        }
       } catch (e) { console.error('Remote save error:', e); }
     };
 
@@ -3117,8 +3150,12 @@
       if (!url) return;
       try {
         const body = JSON.stringify({ action: 'delete', projectId: projectId });
-        const blob = new Blob([body], { type: 'text/plain' });
-        navigator.sendBeacon(url, blob);
+        try {
+          await fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: body, mode: 'no-cors' });
+        } catch(e) {
+          const blob = new Blob([body], { type: 'text/plain' });
+          navigator.sendBeacon(url, blob);
+        }
       } catch (e) { console.error('Remote delete error:', e); }
     };
 
@@ -3553,6 +3590,8 @@
       const [lockWarning, setLockWarning] = useState('');
       const [isLocked, setIsLocked] = useState(false);
       const lockIntervalRef = useRef(null);
+      const activeProjectRef = useRef(null);
+      const saveTimerRef = useRef(null);
 
       // Get or ask for user name
       const getUserName = () => {
@@ -3626,9 +3665,12 @@
 
       const handleOpenProject = (projectId) => {
         getUserName();
+        // Cancel any pending auto-save from previous project
+        if (saveTimerRef.current) { clearTimeout(saveTimerRef.current); saveTimerRef.current = null; }
         const projects = loadAllProjects();
         const project = projects.find(p => p.id === projectId);
         if (project && project.appData) {
+          activeProjectRef.current = projectId;
           setAppData(project.appData);
           setActiveProjectId(projectId);
           setCurrentStep(1);
@@ -3641,8 +3683,11 @@
 
       const handleNewProject = () => {
         getUserName();
+        // Cancel any pending auto-save from previous project
+        if (saveTimerRef.current) { clearTimeout(saveTimerRef.current); saveTimerRef.current = null; }
         const newId = generateId();
         const blank = makeBlankAppData();
+        activeProjectRef.current = newId;
         setAppData(blank);
         setActiveProjectId(newId);
         setCurrentStep(1);
@@ -3654,11 +3699,14 @@
       };
 
       const handleBackToDashboard = () => {
+        // Cancel any pending auto-save
+        if (saveTimerRef.current) { clearTimeout(saveTimerRef.current); saveTimerRef.current = null; }
         if (activeProjectId) {
-          // Save with current appData directly to avoid stale closure
+          // Save with current appData directly
           saveProject(activeProjectId, appData);
           releaseLock(activeProjectId);
         }
+        activeProjectRef.current = null;
         setLockWarning('');
         setIsLocked(false);
         setView('dashboard');
@@ -3703,24 +3751,28 @@
       };
 
       // Auto-save 2 seconds after any data change
-      const saveTimerRef = useRef(null);
       useEffect(() => {
         if (!activeProjectId || view !== 'project') return;
         if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+        const savedProjectId = activeProjectId;
         saveTimerRef.current = setTimeout(() => {
-          saveProject(activeProjectId, appData);
-          setSaveStatus('saved');
-          setTimeout(() => setSaveStatus(''), 1500);
+          // Only save if we're still on the same project
+          if (activeProjectRef.current === savedProjectId) {
+            saveProject(savedProjectId, appData);
+            setSaveStatus('saved');
+            setTimeout(() => setSaveStatus(''), 1500);
+          }
         }, 2000);
         return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
       }, [appData, activeProjectId, view]);
 
       // Auto-save when moving between steps
       const handleNextWithSave = (step) => {
-        handleNext(step);
+        // Save current data immediately before navigating
         if (activeProjectId) {
-          setTimeout(() => doSave(), 100);
+          saveProject(activeProjectId, appData);
         }
+        handleNext(step);
       };
 
       const getStepStatus = (step) => {
@@ -3770,7 +3822,7 @@
               ].map(({ num, label }) => (
                 <button
                   key={num}
-                  onClick={() => handleNext(num)}
+                  onClick={() => { if (activeProjectId) saveProject(activeProjectId, appData); handleNext(num); }}
                   className={`w-full text-left px-4 py-3 rounded-lg transition ${
                     currentStep === num
                       ? 'bg-blue-600 text-white font-bold'
