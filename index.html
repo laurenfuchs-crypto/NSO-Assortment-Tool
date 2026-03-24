@@ -3105,14 +3105,28 @@
           const remoteMap = {};
           json.projects.forEach(p => { if (p.id) { remoteMap[p.id] = p; allIds.add(p.id); } });
 
-          // For each project, keep the newer one
+          // For each project, keep the one with more complete data
           allIds.forEach(id => {
             const l = localMap[id];
             const r = remoteMap[id];
             if (l && r) {
+              // Local has full PST data, remote has stripped — prefer local if it's recent
+              const localHasFullData = l.appData?.pstData?.length > 0 && l.appData.pstData[0]?.seasonCode;
               const lTime = new Date(l.updatedAt || 0).getTime();
               const rTime = new Date(r.updatedAt || 0).getTime();
-              merged.push(lTime >= rTime ? l : r);
+              if (localHasFullData) {
+                // Local has full upload data — keep local, but merge any remote-only fields
+                const mergedProject = JSON.parse(JSON.stringify(l));
+                // If remote has newer checklist/notes, merge those in
+                if (rTime > lTime && r.appData?.proFormaData?.checklistComplete) {
+                  mergedProject.appData.proFormaData.checklistComplete = r.appData.proFormaData.checklistComplete;
+                  mergedProject.appData.proFormaData.checklistNotes = r.appData.proFormaData.checklistNotes;
+                }
+                merged.push(mergedProject);
+              } else {
+                // Neither has full data — keep newer
+                merged.push(lTime >= rTime ? l : r);
+              }
             } else if (l) {
               merged.push(l);
             } else if (r) {
@@ -3172,8 +3186,38 @@
         updatedAt: now, appData,
       };
       if (idx >= 0) { projects[idx] = saveData; } else { projects.push(saveData); }
+      // Save FULL data to local cache (no size limits)
       saveAllProjects(projects);
-      remoteSave(saveData);
+      // Save STRIPPED data to Google Sheet (50K char cell limit)
+      // Strip large uploaded data that can be re-uploaded from Excel files
+      const strippedAppData = JSON.parse(JSON.stringify(appData));
+      // PST data can be 1M+ chars — only save SKU list, not full rows
+      if (strippedAppData.pstData && strippedAppData.pstData.length > 0) {
+        // Keep just enough to reconstruct: sku, department, category, deliveryMonth, storeTier
+        strippedAppData.pstData = strippedAppData.pstData.map(r => ({
+          sku: r.sku, department: r.department, category: r.category,
+          subcategory: r.subcategory, styleDescription: r.styleDescription,
+          colorDescription: r.colorDescription, deliveryMonth: r.deliveryMonth,
+          storeTier: r.storeTier, seasonalLifeCycle: r.seasonalLifeCycle,
+          mdExitWeek: r.mdExitWeek,
+        }));
+      }
+      // Store tiering data can also be large — strip the raw row data
+      if (strippedAppData.storeTieringData) {
+        const st = strippedAppData.storeTieringData;
+        st.mensData = (st.mensData || []).slice(0, 5); // just keep a few for reference
+        st.womensData = (st.womensData || []).slice(0, 5);
+        st.nonApparel = (st.nonApparel || []).slice(0, 5);
+        st.kidsData = (st.kidsData || []).slice(0, 5);
+        // Keep storeGroups and storeMatrix (small)
+      }
+      const remoteSaveData = {
+        id: projectId, storeName,
+        status: getProjectStatus(appData),
+        createdAt: saveData.createdAt,
+        updatedAt: now, appData: strippedAppData,
+      };
+      remoteSave(remoteSaveData);
       return saveData;
     };
 
