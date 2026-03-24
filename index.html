@@ -298,8 +298,8 @@
         // Comp = left side of comparison, New = right side
         result.compStoreOpenDate = toDisplayDate(findValue('Open Date', 'comp'));
         result.newStoreOpenDate = toDateStr(findValue('Open Date', 'new'));
-        result.compStoreRegion = findValue('Area', 'comp');
-        result.newStoreRegion = findValue('Area', 'new');
+        result.compStoreArea = findValue('Area', 'comp');
+        result.newStoreArea = findValue('Area', 'new');
         result.compStoreVibe = findValue('Type', 'comp');
         result.newStoreVibe = findValue('Type', 'new');
         result.compStoreGrossSqft = findValue('Gross Sq. Ft.', 'comp');
@@ -381,7 +381,7 @@
               result.compStoreAnalysis.push({
                 compStore: row[d] || '',
                 openDate: row[d+1] || '',
-                region: row[d+2] || '',
+                area: row[d+2] || '',
                 vibe: row[d+3] || '',
                 grossSqft: row[d+4] || '',
                 sellingSqft: row[d+5] || '',
