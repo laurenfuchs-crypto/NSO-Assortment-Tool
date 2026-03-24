@@ -298,10 +298,10 @@
         // Comp = left side of comparison, New = right side
         result.compStoreOpenDate = toDisplayDate(findValue('Open Date', 'comp'));
         result.newStoreOpenDate = toDateStr(findValue('Open Date', 'new'));
-        result.compStoreRegion = findValue('Region', 'comp');
-        result.newStoreRegion = findValue('Region', 'new');
-        result.compStoreArea = findValue('Type', 'comp');
-        result.newStoreArea = findValue('Type', 'new');
+        result.compStoreRegion = findValue('Area', 'comp');
+        result.newStoreRegion = findValue('Area', 'new');
+        result.compStoreVibe = findValue('Type', 'comp');
+        result.newStoreVibe = findValue('Type', 'new');
         result.compStoreGrossSqft = findValue('Gross Sq. Ft.', 'comp');
         result.newStoreGrossSqft = findValue('Gross Sq. Ft.', 'new');
         result.compStoreSellingSquareFeet = findValue('Selling Sq. Ft.', 'comp');
@@ -382,7 +382,7 @@
                 compStore: row[d] || '',
                 openDate: row[d+1] || '',
                 region: row[d+2] || '',
-                type: row[d+3] || '',
+                vibe: row[d+3] || '',
                 grossSqft: row[d+4] || '',
                 sellingSqft: row[d+5] || '',
                 grossCapex: row[d+6] || '',
@@ -974,7 +974,7 @@
                       </div>
                       <div>
                         <label className="block text-xs font-semibold text-gray-600">Area</label>
-                        <input type="text" value={comp.type || ''} onChange={(e) => handleCompAnalysisChange(idx, 'type', e.target.value)} className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs" />
+                        <input type="text" value={comp.area || ''} onChange={(e) => handleCompAnalysisChange(idx, 'area', e.target.value)} className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs" />
                       </div>
                       <div>
                         <label className="block text-xs font-semibold text-gray-600">Vibe</label>
