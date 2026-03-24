@@ -3221,7 +3221,15 @@
         if (parts.length === 3) { let [m,d,y] = parts.map(Number); if(y<100)y+=y<50?2000:1900; return new Date(y,m-1,d); }
         return null;
       };
-      const activeProjects = filtered.filter(p => { const d = parseOpenDate(p); return !d || d >= today; });
+      const activeProjects = filtered.filter(p => { const d = parseOpenDate(p); return !d || d >= today; })
+        .sort((a, b) => {
+          const da = parseOpenDate(a);
+          const db = parseOpenDate(b);
+          if (!da && !db) return 0;
+          if (!da) return 1;
+          if (!db) return -1;
+          return da - db;
+        });
       const archivedProjects = filtered.filter(p => { const d = parseOpenDate(p); return d && d < today; });
       const [showArchived, setShowArchived] = useState(false);
 
