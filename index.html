@@ -734,7 +734,19 @@
             const parsed = parseProForma(new Uint8Array(event.target.result));
             // Default the Sim Store to the primary comp store from the Pro Forma
             const defaultSimStore = String(parsed.compStoreName || '').trim();
-            onDataChange({ ...data, proFormaData: parsed, simStore: defaultSimStore, step1Complete: true });
+            // Merge parsed data into existing proFormaData — preserve checklist, dates, divMix, linesheet, etc.
+            const mergedProForma = { ...data.proFormaData, ...parsed };
+            // Preserve these fields if they already exist (parser returns empty values for them)
+            if (data.proFormaData.divMix && Object.keys(data.proFormaData.divMix).length > 0) mergedProForma.divMix = data.proFormaData.divMix;
+            if (data.proFormaData.customDateRows) mergedProForma.customDateRows = data.proFormaData.customDateRows;
+            if (data.proFormaData.dateOverrides) mergedProForma.dateOverrides = data.proFormaData.dateOverrides;
+            if (data.proFormaData.checklistComplete) mergedProForma.checklistComplete = data.proFormaData.checklistComplete;
+            if (data.proFormaData.checklistNotes) mergedProForma.checklistNotes = data.proFormaData.checklistNotes;
+            if (data.proFormaData.linesheetBoxUrl) mergedProForma.linesheetBoxUrl = data.proFormaData.linesheetBoxUrl;
+            if (data.proFormaData.linesheetFileName) mergedProForma.linesheetFileName = data.proFormaData.linesheetFileName;
+            if (data.proFormaData.linesheetUploadDate) mergedProForma.linesheetUploadDate = data.proFormaData.linesheetUploadDate;
+            if (data.proFormaData.merchDeliveryDateOverride) mergedProForma.merchDeliveryDateOverride = data.proFormaData.merchDeliveryDateOverride;
+            onDataChange({ ...data, proFormaData: mergedProForma, simStore: defaultSimStore, step1Complete: true });
           } catch (error) {
             alert('Error parsing Pro Forma file: ' + error.message);
           }
