@@ -3071,27 +3071,42 @@
     // Remote: upsert project to Supabase
     const remoteSave = async (projectData) => {
       try {
-        await fetch(SUPABASE_URL + '/rest/v1/projects', {
+        const res = await fetch(SUPABASE_URL + '/rest/v1/projects', {
           method: 'POST',
-          headers: { ...supaHeaders, 'Prefer': 'resolution=merge-duplicates,return=minimal' },
+          headers: {
+            'apikey': SUPABASE_KEY,
+            'Authorization': 'Bearer ' + SUPABASE_KEY,
+            'Content-Type': 'application/json',
+            'Prefer': 'resolution=merge-duplicates',
+          },
           body: JSON.stringify({
             id: projectData.id,
             store_name: projectData.storeName,
             status: projectData.status,
-            updated_at: projectData.updatedAt,
+            updated_at: projectData.updatedAt || new Date().toISOString(),
             app_data: projectData.appData,
           }),
         });
+        if (!res.ok) {
+          const errText = await res.text();
+          console.error('Supabase save failed:', res.status, errText);
+        } else {
+          console.log('Supabase save OK:', projectData.id, projectData.storeName);
+        }
       } catch (e) { console.error('Remote save error:', e); }
     };
 
     // Remote: delete project from Supabase
     const remoteDelete = async (projectId) => {
       try {
-        await fetch(SUPABASE_URL + '/rest/v1/projects?id=eq.' + projectId, {
+        const res = await fetch(SUPABASE_URL + '/rest/v1/projects?id=eq.' + projectId, {
           method: 'DELETE',
-          headers: supaHeaders,
+          headers: {
+            'apikey': SUPABASE_KEY,
+            'Authorization': 'Bearer ' + SUPABASE_KEY,
+          },
         });
+        if (!res.ok) console.error('Supabase delete failed:', res.status);
       } catch (e) { console.error('Remote delete error:', e); }
     };
 
