@@ -3639,13 +3639,16 @@
         setActiveProjectId(newId);
         setCurrentStep(1);
         setView('project');
+        // Save immediately so the project exists in Google Sheet
+        saveProject(newId, blank);
         acquireLock(newId);
         startLockRefresh(newId);
       };
 
       const handleBackToDashboard = () => {
         if (activeProjectId) {
-          doSave();
+          // Save with current appData directly to avoid stale closure
+          saveProject(activeProjectId, appData);
           releaseLock(activeProjectId);
         }
         setLockWarning('');
@@ -3690,6 +3693,19 @@
       const handleDataChange = (newData) => {
         setAppData(newData);
       };
+
+      // Auto-save 2 seconds after any data change
+      const saveTimerRef = useRef(null);
+      useEffect(() => {
+        if (!activeProjectId || view !== 'project') return;
+        if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = setTimeout(() => {
+          saveProject(activeProjectId, appData);
+          setSaveStatus('saved');
+          setTimeout(() => setSaveStatus(''), 1500);
+        }, 2000);
+        return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
+      }, [appData, activeProjectId, view]);
 
       // Auto-save when moving between steps
       const handleNextWithSave = (step) => {
