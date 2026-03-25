@@ -3132,8 +3132,8 @@
       } catch (e) { console.error('Load project error:', e); return null; }
     };
 
-    // Save project to Supabase (primary storage)
-    const saveProject = (projectId, appData) => {
+    // Save project to Supabase (primary storage) — returns promise
+    const saveProject = async (projectId, appData) => {
       const storeName = appData.proFormaData?.newStoreName || 'Unnamed Store';
       const now = new Date().toISOString();
       const status = getProjectStatus(appData);
@@ -3145,16 +3145,20 @@
       if (idx >= 0) { cache[idx] = cacheEntry; } else { cache.push(cacheEntry); }
       saveDashboardCache(cache);
 
-      // Save full data to Supabase
-      supaFetch('projects', {
-        method: 'POST',
-        headers: { 'Prefer': 'resolution=merge-duplicates' },
-        body: JSON.stringify({
-          id: projectId, store_name: storeName, status, updated_at: now, app_data: appData,
-        }),
-      }).then(r => {
-        if (!r.ok) r.text().then(t => console.error('Save failed:', r.status, t));
-      }).catch(e => console.error('Save error:', e));
+      // Save full data to Supabase and WAIT for it
+      try {
+        const res = await supaFetch('projects', {
+          method: 'POST',
+          headers: { 'Prefer': 'resolution=merge-duplicates' },
+          body: JSON.stringify({
+            id: projectId, store_name: storeName, status, updated_at: now, app_data: appData,
+          }),
+        });
+        if (!res.ok) {
+          const t = await res.text();
+          console.error('Save failed:', res.status, t);
+        }
+      } catch (e) { console.error('Save error:', e); }
 
       return { id: projectId, storeName, status, createdAt: cacheEntry.createdAt, updatedAt: now, appData };
     };
@@ -3694,10 +3698,10 @@
         startLockRefresh(newId);
       };
 
-      const handleBackToDashboard = () => {
+      const handleBackToDashboard = async () => {
         if (saveTimerRef.current) { clearTimeout(saveTimerRef.current); saveTimerRef.current = null; }
         if (activeProjectId) {
-          saveProject(activeProjectId, appData);
+          await saveProject(activeProjectId, appData);
           releaseLock(activeProjectId);
         }
         activeProjectRef.current = null;
@@ -3761,10 +3765,9 @@
       }, [appData, activeProjectId, view]);
 
       // Auto-save when moving between steps
-      const handleNextWithSave = (step) => {
-        // Save current data immediately before navigating
+      const handleNextWithSave = async (step) => {
         if (activeProjectId) {
-          saveProject(activeProjectId, appData);
+          await saveProject(activeProjectId, appData);
         }
         handleNext(step);
       };
@@ -3824,7 +3827,7 @@
               ].map(({ num, label }) => (
                 <button
                   key={num}
-                  onClick={() => { if (activeProjectId) saveProject(activeProjectId, appData); handleNext(num); }}
+                  onClick={async () => { if (activeProjectId) await saveProject(activeProjectId, appData); handleNext(num); }}
                   className={`w-full text-left px-4 py-3 rounded-lg transition ${
                     currentStep === num
                       ? 'bg-blue-600 text-white font-bold'
