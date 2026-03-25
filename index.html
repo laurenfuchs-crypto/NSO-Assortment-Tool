@@ -3059,7 +3059,7 @@
       try { localStorage.setItem(CACHE_KEY, JSON.stringify(projects)); } catch {}
     };
 
-    // Remote: load all projects from Supabase
+    // Remote: load all projects from Supabase and merge with local
     const remoteLoadAll = async () => {
       try {
         const res = await fetch(SUPABASE_URL + '/rest/v1/projects?select=*&order=updated_at.desc', {
@@ -3071,8 +3071,8 @@
         }
         const rows = await res.json();
         console.log('Supabase loaded', rows.length, 'projects');
-        if (rows.length > 0) console.log('First row keys:', Object.keys(rows[0]), 'has app_data:', !!rows[0].app_data);
-        const projects = rows.map(r => ({
+
+        const remoteProjects = rows.map(r => ({
           id: r.id,
           storeName: r.store_name || '',
           status: r.status || '',
@@ -3080,8 +3080,51 @@
           updatedAt: r.updated_at || '',
           appData: r.app_data || makeBlankAppData(),
         }));
-        saveAllProjects(projects);
-        return projects;
+
+        // MERGE: for each project, keep the version with more complete data
+        const local = loadAllProjects();
+        const localMap = {};
+        local.forEach(p => { if (p.id) localMap[p.id] = p; });
+        const remoteMap = {};
+        remoteProjects.forEach(p => { if (p.id) remoteMap[p.id] = p; });
+
+        const allIds = new Set([...Object.keys(localMap), ...Object.keys(remoteMap)]);
+        const merged = [];
+
+        allIds.forEach(id => {
+          const l = localMap[id];
+          const r = remoteMap[id];
+          if (l && r) {
+            // Compare data completeness: count of non-empty fields in appData
+            const localSize = JSON.stringify(l.appData || {}).length;
+            const remoteSize = JSON.stringify(r.appData || {}).length;
+            const lTime = new Date(l.updatedAt || 0).getTime();
+            const rTime = new Date(r.updatedAt || 0).getTime();
+            
+            // Keep the bigger dataset, or if similar size, keep the newer one
+            if (localSize > remoteSize * 1.1) {
+              console.log('Merge: keeping LOCAL for', l.storeName, '(local:', Math.round(localSize/1024)+'KB, remote:', Math.round(remoteSize/1024)+'KB)');
+              merged.push(l);
+              // Push local data to Supabase since it's more complete
+              remoteSave(l);
+            } else if (remoteSize > localSize * 1.1) {
+              console.log('Merge: keeping REMOTE for', r.storeName, '(local:', Math.round(localSize/1024)+'KB, remote:', Math.round(remoteSize/1024)+'KB)');
+              merged.push(r);
+            } else {
+              // Similar size — keep newer
+              merged.push(lTime >= rTime ? l : r);
+            }
+          } else if (l) {
+            merged.push(l);
+            // Push local-only project to Supabase
+            remoteSave(l);
+          } else if (r) {
+            merged.push(r);
+          }
+        });
+
+        saveAllProjects(merged);
+        return merged;
       } catch (e) { console.error('Remote load error:', e); return null; }
     };
 
@@ -3683,12 +3726,25 @@
         startLockRefresh(newId);
       };
 
-      const handleBackToDashboard = () => {
+      const handleBackToDashboard = async () => {
         // Cancel any pending auto-save
         if (saveTimerRef.current) { clearTimeout(saveTimerRef.current); saveTimerRef.current = null; }
         if (activeProjectId) {
-          // Save with current appData directly
-          saveProject(activeProjectId, appData);
+          // Save with current appData and WAIT for remote save to complete
+          const projects = loadAllProjects();
+          const storeName = appData.proFormaData?.newStoreName || 'Unnamed Store';
+          const now = new Date().toISOString();
+          const idx = projects.findIndex(p => p.id === activeProjectId);
+          const saveData = {
+            id: activeProjectId, storeName,
+            status: getProjectStatus(appData),
+            createdAt: idx >= 0 ? projects[idx].createdAt : now,
+            updatedAt: now, appData,
+          };
+          if (idx >= 0) { projects[idx] = saveData; } else { projects.push(saveData); }
+          saveAllProjects(projects);
+          // Wait for remote save to finish before navigating
+          await remoteSave(saveData);
           releaseLock(activeProjectId);
         }
         activeProjectRef.current = null;
