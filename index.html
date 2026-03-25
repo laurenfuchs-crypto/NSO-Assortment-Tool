@@ -3262,6 +3262,12 @@
       const [confirmDelete, setConfirmDelete] = useState(null);
       const [syncing, setSyncing] = useState(false);
 
+      // Push local data to Supabase on mount (don't pull — prevents overwrites)
+      const pushLocalToRemote = () => {
+        const local = loadAllProjects();
+        local.forEach(p => remoteSave(p));
+      };
+
       const doSync = () => {
         setSyncing(true);
         remoteLoadAll().then(remote => {
@@ -3270,8 +3276,8 @@
         });
       };
 
-      // Sync from Google Sheet on mount
-      useEffect(() => { doSync(); }, []);
+      // On mount: push local data to Supabase, but DON'T overwrite local with remote
+      useEffect(() => { pushLocalToRemote(); }, []);
 
       const filtered = projects.filter(p =>
         !search || p.storeName.toLowerCase().includes(search.toLowerCase())
