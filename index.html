@@ -3783,9 +3783,9 @@
       }, [appData, activeProjectId, view]);
 
       // Auto-save when moving between steps
-      const handleNextWithSave = async (step) => {
+      const handleNextWithSave = (step) => {
         if (activeProjectId) {
-          await saveProject(activeProjectId, appDataRef.current);
+          saveProject(activeProjectId, appDataRef.current);
         }
         handleNext(step);
       };
@@ -3845,7 +3845,7 @@
               ].map(({ num, label }) => (
                 <button
                   key={num}
-                  onClick={async () => { if (activeProjectId) await saveProject(activeProjectId, appDataRef.current); handleNext(num); }}
+                  onClick={() => { if (activeProjectId) saveProject(activeProjectId, appDataRef.current); handleNext(num); }}
                   className={`w-full text-left px-4 py-3 rounded-lg transition ${
                     currentStep === num
                       ? 'bg-blue-600 text-white font-bold'
