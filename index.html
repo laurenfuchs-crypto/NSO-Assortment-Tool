@@ -3085,9 +3085,27 @@
       } catch (e) { console.error('Remote load error:', e); return null; }
     };
 
-    // Remote: upsert project to Supabase
+    // Remote: upsert project to Supabase (sequential — only one save at a time)
+    let _saving = false;
+    let _pendingSave = null;
+
     const remoteSave = async (projectData) => {
+      // If already saving, queue this one (latest data wins)
+      if (_saving) {
+        _pendingSave = projectData;
+        return;
+      }
+      _saving = true;
       try {
+        const bodyData = {
+          id: projectData.id,
+          store_name: projectData.storeName,
+          status: projectData.status,
+          updated_at: projectData.updatedAt || new Date().toISOString(),
+          app_data: projectData.appData,
+        };
+        const bodyStr = JSON.stringify(bodyData);
+        console.log('Supabase saving:', projectData.id, projectData.storeName, 'size:', Math.round(bodyStr.length / 1024) + 'KB');
         const res = await fetch(SUPABASE_URL + '/rest/v1/projects', {
           method: 'POST',
           headers: {
@@ -3096,13 +3114,7 @@
             'Content-Type': 'application/json',
             'Prefer': 'resolution=merge-duplicates',
           },
-          body: JSON.stringify({
-            id: projectData.id,
-            store_name: projectData.storeName,
-            status: projectData.status,
-            updated_at: projectData.updatedAt || new Date().toISOString(),
-            app_data: projectData.appData,
-          }),
+          body: bodyStr,
         });
         if (!res.ok) {
           const errText = await res.text();
@@ -3111,6 +3123,13 @@
           console.log('Supabase save OK:', projectData.id, projectData.storeName);
         }
       } catch (e) { console.error('Remote save error:', e); }
+      _saving = false;
+      // Process any queued save
+      if (_pendingSave) {
+        const next = _pendingSave;
+        _pendingSave = null;
+        remoteSave(next);
+      }
     };
 
     // Remote: delete project from Supabase
@@ -3716,7 +3735,7 @@
         setAppData(newData);
       };
 
-      // Auto-save 2 seconds after any data change
+      // Auto-save 5 seconds after any data change
       useEffect(() => {
         if (!activeProjectId || view !== 'project') return;
         if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -3728,7 +3747,7 @@
             setSaveStatus('saved');
             setTimeout(() => setSaveStatus(''), 1500);
           }
-        }, 2000);
+        }, 5000);
         return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
       }, [appData, activeProjectId, view]);
 
