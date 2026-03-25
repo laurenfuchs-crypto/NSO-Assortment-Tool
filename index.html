@@ -3753,6 +3753,14 @@
         if (step === 1) return appData.step1Complete;
         if (step === 2) return appData.step2Complete;
         if (step === 3) return appData.step3Complete;
+        if (step === 4) {
+          // Complete when all divisions have been signed off
+          const signoffs = appData.divisionSignoffs || {};
+          const pst = appData.pstData || [];
+          if (pst.length === 0) return false;
+          const divisions = [...new Set(pst.map(r => r.department).filter(Boolean))];
+          return divisions.length > 0 && divisions.every(d => signoffs[d] && signoffs[d].length > 0);
+        }
         return false;
       };
 
