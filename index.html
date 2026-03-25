@@ -2545,12 +2545,28 @@
                     : 'Upload the Reserved Units file to populate units and avg depth'}
                 </p>
               </div>
-              <button
-                onClick={() => reservedFileRef.current?.click()}
-                className={`px-4 py-2 rounded text-xs font-semibold ${reservedLoaded ? 'bg-green-600 text-white hover:bg-green-700' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
-              >
-                {reservedLoaded ? 'Reload File' : 'Upload Reserved Units (.xlsx)'}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    const skus = filteredData.filter(r => (data.skuActions?.[r.sku] || 'Keep') !== 'Drop').map(r => r.sku);
+                    const ws = XLSX.utils.aoa_to_sheet([['SKU', 'Quantity'], ...skus.map(s => [s, ''])]);
+                    ws['!cols'] = [{ wch: 20 }, { wch: 12 }];
+                    const wb = XLSX.utils.book_new();
+                    XLSX.utils.book_append_sheet(wb, ws, 'Reserved Units');
+                    const storeName = (data.proFormaData?.newStoreName || 'NSO').replace(/[^a-zA-Z0-9]/g, '_');
+                    XLSX.writeFile(wb, storeName + '_Reserved_Units_Template.xlsx');
+                  }}
+                  className="px-4 py-2 bg-gray-200 text-gray-700 rounded text-xs font-semibold hover:bg-gray-300"
+                >
+                  Download Template
+                </button>
+                <button
+                  onClick={() => reservedFileRef.current?.click()}
+                  className={`px-4 py-2 rounded text-xs font-semibold ${reservedLoaded ? 'bg-green-600 text-white hover:bg-green-700' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
+                >
+                  {reservedLoaded ? 'Reload File' : 'Upload Reserved Units (.xlsx)'}
+                </button>
+              </div>
               <input ref={reservedFileRef} type="file" accept=".xlsx,.xls" onChange={handleReservedUpload} className="hidden" />
             </div>
           </div>
