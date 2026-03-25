@@ -3704,7 +3704,6 @@
 
       const handleBackToDashboard = async () => {
         if (saveTimerRef.current) { clearTimeout(saveTimerRef.current); saveTimerRef.current = null; }
-        if (instantSaveTimerRef.current) { clearTimeout(instantSaveTimerRef.current); instantSaveTimerRef.current = null; }
         if (activeProjectId) {
           // Use ref for guaranteed latest data (state might be stale)
           await saveProject(activeProjectId, appDataRef.current);
@@ -3750,35 +3749,24 @@
         window.scrollTo(0, 0);
       };
 
-      const instantSaveTimerRef = useRef(null);
       const handleDataChange = (newData) => {
         setAppData(newData);
         appDataRef.current = newData;
-        // Debounced save to Supabase (1 second after last change)
-        if (instantSaveTimerRef.current) clearTimeout(instantSaveTimerRef.current);
-        if (activeProjectId) {
-          instantSaveTimerRef.current = setTimeout(() => {
-            if (activeProjectRef.current === activeProjectId) {
-              saveProject(activeProjectId, appDataRef.current);
-            }
-          }, 1000);
-        }
       };
 
-      // Auto-save 5 seconds after any data change
+      // Auto-save 3 seconds after any data change
       useEffect(() => {
         if (!activeProjectId || view !== 'project') return;
-        appDataRef.current = appData; // keep ref in sync
+        appDataRef.current = appData;
         if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
         const savedProjectId = activeProjectId;
         saveTimerRef.current = setTimeout(() => {
-          // Only save if we're still on the same project
           if (activeProjectRef.current === savedProjectId) {
             saveProject(savedProjectId, appDataRef.current);
             setSaveStatus('saved');
             setTimeout(() => setSaveStatus(''), 1500);
           }
-        }, 5000);
+        }, 3000);
         return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
       }, [appData, activeProjectId, view]);
 
