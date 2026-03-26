@@ -2854,12 +2854,12 @@
               <tbody>
                 {(() => {
                   const ownerColors = {
-                    'Visual Merchandising': { bg: 'bg-indigo-100', text: 'text-indigo-800' },
-                    'Store Planning': { bg: 'bg-purple-100', text: 'text-purple-800' },
-                    'Merchandising': { bg: 'bg-blue-100', text: 'text-blue-800' },
-                    'Allocation': { bg: 'bg-green-100', text: 'text-green-800' },
-                    'Ops': { bg: 'bg-orange-100', text: 'text-orange-800' },
-                    'Store Development': { bg: 'bg-pink-100', text: 'text-pink-800' },
+                    'Visual Merchandising': { bg: '#e0e7ff', text: '#3730a3' },
+                    'Store Planning': { bg: '#f3e8ff', text: '#6b21a8' },
+                    'Merchandising': { bg: '#dbeafe', text: '#1e40af' },
+                    'Allocation': { bg: '#dcfce7', text: '#166534' },
+                    'Ops': { bg: '#ffedd5', text: '#9a3412' },
+                    'Store Development': { bg: '#fce7f3', text: '#9d174d' },
                   };
                   const milestoneOwners = {
                     skuCountAlignment: 'Visual Merchandising',
@@ -2882,18 +2882,19 @@
                   const isOverdue = !isDone && row.dateObj && row.dateObj < today && !row.readonly;
                   const isEditing = (data.proFormaData._editingDateRow || '') === row.id;
                   const owner = milestoneOwners[row.id] || '';
-                  const ownerStyle = ownerColors[owner] || { bg: '', text: 'text-gray-400' };
-                  const rowBg = isDone ? 'bg-green-50 opacity-70' : isOverdue ? 'bg-red-50' : owner ? ownerStyle.bg : row.highlight ? 'bg-blue-50' : row.isCustom ? 'bg-yellow-50' : 'hover:bg-gray-50';
+                  const ownerStyle = ownerColors[owner] || null;
+                  const rowStyle = isDone ? {} : isOverdue ? {} : owner && ownerStyle ? { backgroundColor: ownerStyle.bg } : {};
+                  const rowClass = isDone ? 'bg-green-50 opacity-70' : isOverdue ? 'bg-red-50' : !owner ? (row.highlight ? 'bg-blue-50' : row.isCustom ? 'bg-yellow-50' : 'hover:bg-gray-50') : '';
                   return (
-                    <tr key={row.id} className={`border-b border-gray-200 ${rowBg}`}>
+                    <tr key={row.id} className={`border-b border-gray-200 ${rowClass}`} style={rowStyle}>
                       <td className="px-3 py-2 text-center">
                         {!row.readonly && (
                           <input type="checkbox" checked={isDone} onChange={() => toggleComplete(row.id)} className="w-4 h-4 rounded cursor-pointer" />
                         )}
                       </td>
                       <td className="px-2 py-1">
-                        {owner ? (
-                          <span className={`inline-block px-2 py-0.5 rounded text-xs font-semibold ${ownerStyle.text} ${ownerStyle.bg}`}>{owner}</span>
+                        {owner && ownerStyle ? (
+                          <span style={{ backgroundColor: ownerStyle.bg, color: ownerStyle.text, padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 600 }}>{owner}</span>
                         ) : <span className="text-xs text-gray-300">—</span>}
                       </td>
                       <td className={`px-3 py-2 text-xs font-semibold ${isDone ? 'line-through text-gray-400' : isOverdue ? 'text-red-700' : 'text-gray-800'}`}>
