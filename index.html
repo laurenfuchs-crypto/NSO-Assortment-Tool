@@ -2691,6 +2691,7 @@
       const getAsstSeason = (date) => { if (!date) return '—'; const m=date.getMonth(); if(m>=1&&m<=3) return 'Spring'; if(m>=4&&m<=6) return 'Summer'; if(m>=7&&m<=9) return 'Fall'; return 'Holiday'; };
 
       const openDate = parseDate(proFormaData.newStoreOpenDate || '');
+      const transitDays = parseInt(proFormaData.transitDays) || 0;
       const merchOverride = (proFormaData.dateOverrides || {}).merchDelivery || proFormaData.merchDeliveryDateOverride || '';
       const merchDefault = addDays(openDate, -4);
       const merchDate = merchOverride ? (parseDate(merchOverride) || merchDefault) : merchDefault;
@@ -2704,6 +2705,12 @@
       const linesheetCreation = allocReserve;
       const dateOverrides = proFormaData.dateOverrides || {};
 
+      // Transit-related milestones
+      const dcDeparture = addDays(openDate, -transitDays);
+      const truckBooking = addDays(dcDeparture, -1);
+      const dcPackingStarts = addDays(dcDeparture, -7);
+      const allocNetsuiteImport = allocDrop;
+
       const baseRows = [
         { id: 'skuCountAlignment', label: 'SKU Count Alignment', calcDate: skuCountAlignment, hint: 'Merch Pass Off - 14 days' },
         { id: 'merchPassOff', label: 'Merch Pass Off', calcDate: merchPassOff, hint: 'Final Review - 7 days' },
@@ -2712,6 +2719,10 @@
         { id: 'allocReserve', label: 'Allocation Reserve', calcDate: allocReserve, hint: 'Depth Review - 7 days' },
         { id: 'depthReview', label: 'Depth Review', calcDate: depthReview, hint: 'Alloc Drop - 7 days' },
         { id: 'allocDrop', label: 'Allocation Drop Date', calcDate: allocDrop, hint: 'Merch Delivery - 18 days' },
+        { id: 'allocNetsuiteImport', label: 'Alloc Netsuite Import', calcDate: allocNetsuiteImport, hint: 'Same as Alloc Drop' },
+        { id: 'dcPackingStarts', label: 'DC Packing Starts', calcDate: dcPackingStarts, hint: 'DC Departure - 7 days' },
+        { id: 'truckBooking', label: 'Truck Booking', calcDate: truckBooking, hint: 'DC Departure - 1 day' },
+        { id: 'dcDeparture', label: 'DC Departure', calcDate: dcDeparture, hint: 'Opening - ' + transitDays + ' days (transit)' },
         { id: 'linesheetFinal', label: 'Linesheet Creation - FINAL', calcDate: linesheetFinal, hint: 'Merch Delivery - 10 days' },
         { id: 'merchDelivery', label: 'Merch Delivery Date', calcDate: merchDefault, hint: 'Opening - 4 days', highlight: true },
         { id: 'openingDate', label: 'Opening Date', calcDate: openDate, hint: '', highlight: true },
@@ -2811,6 +2822,20 @@
                 <div className="bg-green-500 h-3 rounded-full transition-all" style={{width: (rows.length > 0 ? (completedCount/rows.length)*100 : 0) + '%'}}></div>
               </div>
             </div>
+          </div>
+
+          {/* Transit Rule */}
+          <div className="bg-white rounded-lg shadow-md p-4 flex items-center gap-4">
+            <label className="text-sm font-semibold text-gray-700 whitespace-nowrap">Transit Rule (days):</label>
+            <input
+              type="number"
+              min="0"
+              value={data.proFormaData?.transitDays || ''}
+              onChange={(e) => onDataChange({ ...data, proFormaData: { ...data.proFormaData, transitDays: parseInt(e.target.value) || 0 } })}
+              placeholder="e.g. 5"
+              className="w-24 px-3 py-2 border border-gray-300 rounded-lg text-sm"
+            />
+            <span className="text-xs text-gray-400">Number of transit days for this store. Used to calculate shipping-related milestones.</span>
           </div>
 
           <div className="bg-white rounded-lg shadow-md overflow-hidden">
@@ -3488,8 +3513,8 @@
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="text-lg font-bold text-gray-800">Checklist Overview</h3>
                   <button onClick={() => {
-                    const mIds = ['skuCountAlignment','merchPassOff','merchFinalReview','linesheetCreation','allocReserve','depthReview','allocDrop','linesheetFinal','merchDelivery','openingDate'];
-                    const mLabels = { skuCountAlignment:'SKU Count Alignment', merchPassOff:'Merch Pass Off', merchFinalReview:'Merch Final Review', linesheetCreation:'Linesheet Creation', allocReserve:'Allocation Reserve', depthReview:'Depth Review', allocDrop:'Allocation Drop Date', linesheetFinal:'Linesheet Creation - FINAL', merchDelivery:'Merch Delivery Date', openingDate:'Opening Date' };
+                    const mIds = ['skuCountAlignment','merchPassOff','merchFinalReview','linesheetCreation','allocReserve','depthReview','allocDrop','allocNetsuiteImport','dcPackingStarts','truckBooking','dcDeparture','linesheetFinal','merchDelivery','openingDate'];
+                    const mLabels = { skuCountAlignment:'SKU Count Alignment', merchPassOff:'Merch Pass Off', merchFinalReview:'Merch Final Review', linesheetCreation:'Linesheet Creation', allocReserve:'Allocation Reserve', depthReview:'Depth Review', allocDrop:'Allocation Drop Date', allocNetsuiteImport:'Alloc Netsuite Import', dcPackingStarts:'DC Packing Starts', truckBooking:'Truck Booking', dcDeparture:'DC Departure', linesheetFinal:'Linesheet Creation - FINAL', merchDelivery:'Merch Delivery Date', openingDate:'Opening Date' };
                     const td = new Date(); td.setHours(0,0,0,0);
                     const exportRows = [];
                     mIds.forEach(id => {
@@ -3516,8 +3541,8 @@
                 </div>
                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-x-auto">
                   {(() => {
-                    const mIds = ['skuCountAlignment','merchPassOff','merchFinalReview','linesheetCreation','allocReserve','depthReview','allocDrop','linesheetFinal','merchDelivery','openingDate'];
-                    const mLabels = { skuCountAlignment:'SKU Count Alignment', merchPassOff:'Merch Pass Off', merchFinalReview:'Merch Final Review', linesheetCreation:'Linesheet Creation', allocReserve:'Allocation Reserve', depthReview:'Depth Review', allocDrop:'Allocation Drop Date', linesheetFinal:'Linesheet Creation - FINAL', merchDelivery:'Merch Delivery Date', openingDate:'Opening Date' };
+                    const mIds = ['skuCountAlignment','merchPassOff','merchFinalReview','linesheetCreation','allocReserve','depthReview','allocDrop','allocNetsuiteImport','dcPackingStarts','truckBooking','dcDeparture','linesheetFinal','merchDelivery','openingDate'];
+                    const mLabels = { skuCountAlignment:'SKU Count Alignment', merchPassOff:'Merch Pass Off', merchFinalReview:'Merch Final Review', linesheetCreation:'Linesheet Creation', allocReserve:'Allocation Reserve', depthReview:'Depth Review', allocDrop:'Allocation Drop Date', allocNetsuiteImport:'Alloc Netsuite Import', dcPackingStarts:'DC Packing Starts', truckBooking:'Truck Booking', dcDeparture:'DC Departure', linesheetFinal:'Linesheet Creation - FINAL', merchDelivery:'Merch Delivery Date', openingDate:'Opening Date' };
                     const td = new Date(); td.setHours(0,0,0,0);
 
                     const handleAggToggle = (projectId, milestoneId) => {
