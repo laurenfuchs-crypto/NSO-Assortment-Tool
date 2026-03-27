@@ -2184,9 +2184,9 @@
           </div>
 
           {/* Assortment Review Table with Inline Filters */}
-          <div className="bg-white rounded-lg shadow-md p-4">
+          <div className="bg-white rounded-lg shadow-md p-4" style={{minHeight: '80vh'}}>
             <div className="text-sm text-gray-600 mb-2">Showing {Math.min(page * pageSize + 1, filteredData.length)}-{Math.min((page + 1) * pageSize, filteredData.length)} of {filteredData.length}</div>
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto" style={{minHeight: '70vh'}}>
               <table className="w-full text-sm border-collapse">
                 <thead>
                   {/* Header row */}
@@ -3312,7 +3312,9 @@
       // Split into active vs archived (opening date has passed = archived)
       const today = new Date(); today.setHours(0,0,0,0);
       const parseOpenDate = (p) => {
-        const s = p.appData?.proFormaData?.newStoreOpenDate || '';
+        // Try fullProjects first (has appData), then fall back to slim project
+        const fp = fullProjects[p.id];
+        const s = fp?.appData?.proFormaData?.newStoreOpenDate || p.appData?.proFormaData?.newStoreOpenDate || '';
         if (!s) return null;
         if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return new Date(s + 'T12:00:00');
         const parts = String(s).split('/');
