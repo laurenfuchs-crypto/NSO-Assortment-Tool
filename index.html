@@ -2029,7 +2029,7 @@
         const ws = XLSX.utils.json_to_sheet(exportData);
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, 'Assortment Review');
-        XLSX.writeFile(wb, 'assortment-review.xlsx');
+        XLSX.writeFile(wb, (data.proFormaData?.newStoreName || 'NSO').replace(/[^a-zA-Z0-9 ]/g, '').replace(/\s+/g, '_') + '_Assortment_Review.xlsx');
       };
 
       // Division-level counts for sign-off section
@@ -2155,31 +2155,6 @@
                 <button onClick={() => { setFilters({ sku:[], styleDescription:[], colorDescription:[], department:[], category:[], subcategory:[], deliveryMonth:[], storeTier:[], seasonalLifeCycle:[], mdExitWeek:[], action:[], notes:[] }); setPage(0); }} className="px-3 py-1.5 bg-yellow-500 text-white rounded text-xs font-semibold hover:bg-yellow-600">Clear All Filters</button>
               )}
               <button onClick={handleExport} className="px-3 py-1.5 bg-gray-700 text-white rounded text-xs font-semibold hover:bg-gray-800">Export Excel</button>
-              <button onClick={() => {
-                const skus = sortedData.filter(row => { const a = skuActions[row.sku] || 'Keep'; return a === 'Keep' || a === 'Add'; }).map(row => row.sku);
-                const unique = [...new Set(skus)];
-                const text = unique.join('\n');
-                navigator.clipboard.writeText(text).then(() => {
-                  alert('Copied ' + unique.length + ' SKUs to clipboard!\n\nPaste into Claude with the NuORDER skill to create your linesheet.');
-                }).catch(() => {
-                  // Fallback: download as text file
-                  const blob = new Blob([text], { type: 'text/plain' });
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement('a'); a.href = url;
-                  a.download = (data.proFormaData?.newStoreName || 'NSO') .replace(/[^a-zA-Z0-9]/g, '_') + '_linesheet_skus.txt';
-                  a.click(); URL.revokeObjectURL(url);
-                });
-              }} className="px-3 py-1.5 bg-purple-600 text-white rounded text-xs font-semibold hover:bg-purple-700">Copy SKUs for Linesheet</button>
-              <button onClick={() => {
-                const skus = sortedData.filter(row => { const a = skuActions[row.sku] || 'Keep'; return a === 'Keep' || a === 'Add'; }).map(row => row.sku);
-                const unique = [...new Set(skus)];
-                const ws = XLSX.utils.aoa_to_sheet([['SKU'], ...unique.map(s => [s])]);
-                ws['!cols'] = [{ wch: 20 }];
-                const wb = XLSX.utils.book_new();
-                XLSX.utils.book_append_sheet(wb, ws, 'Linesheet SKUs');
-                const storeName = (data.proFormaData?.newStoreName || 'NSO').replace(/[^a-zA-Z0-9]/g, '_');
-                XLSX.writeFile(wb, storeName + '_Linesheet_SKUs.xlsx');
-              }} className="px-3 py-1.5 bg-indigo-600 text-white rounded text-xs font-semibold hover:bg-indigo-700">Export Linesheet SKUs</button>
             </div>
           </div>
 
