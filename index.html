@@ -3140,12 +3140,16 @@
     // Load full project list from Supabase (dashboard metadata only — no app_data)
     const remoteLoadAll = async () => {
       try {
-        const res = await supaFetch('projects?select=id,store_name,status,created_at,updated_at&order=updated_at.desc');
-        if (!res.ok) return null;
+        let res = await supaFetch('projects?select=id,store_name,status,created_at,updated_at&order=updated_at.desc');
+        if (!res.ok) {
+          // Fallback: try without updated_at in case column doesn't exist
+          res = await supaFetch('projects?select=id,store_name,status,created_at&order=created_at.desc');
+          if (!res.ok) return null;
+        }
         const rows = await res.json();
         const projects = rows.map(r => ({
           id: r.id, storeName: r.store_name || '', status: r.status || '',
-          createdAt: r.created_at || '', updatedAt: r.updated_at || '',
+          createdAt: r.created_at || '', updatedAt: r.updated_at || r.created_at || '',
         }));
         saveDashboardCache(projects);
         return projects;
@@ -3256,25 +3260,25 @@
       const [search, setSearch] = useState('');
       const [confirmDelete, setConfirmDelete] = useState(null);
       const [syncing, setSyncing] = useState(false);
+      const [statusFilter, setStatusFilter] = useState('all');
 
-      const doSync = () => {
+      const doSync = async () => {
         setSyncing(true);
-        remoteLoadAll().then(remote => {
+        try {
+          const remote = await remoteLoadAll();
           if (remote) setProjects(remote);
-          // Also load full data for Gantt checklist
-          supaFetch('projects?select=*&order=updated_at.desc').then(r => r.json()).then(rows => {
+          // Load full data per-project (avoids huge select=* that causes 500s)
+          const list = remote || loadDashboardCache();
+          if (list.length > 0) {
+            const results = await Promise.allSettled(list.map(p => remoteLoadProject(p.id)));
             const map = {};
-            rows.forEach(r => {
-              map[r.id] = {
-                id: r.id, storeName: r.store_name || '', status: r.status || '',
-                createdAt: r.created_at || '', updatedAt: r.updated_at || '',
-                appData: r.app_data || makeBlankAppData(),
-              };
+            results.forEach(r => {
+              if (r.status === 'fulfilled' && r.value) map[r.value.id] = r.value;
             });
             setFullProjects(map);
-          }).catch(() => {});
-          setSyncing(false);
-        });
+          }
+        } catch (e) { console.error('doSync error:', e); }
+        setSyncing(false);
       };
 
       // Load on mount
@@ -3307,8 +3311,6 @@
             return da - db;
           });
       }, [filtered, fullProjects]);
-      const archivedProjects = filtered.filter(p => { const d = parseOpenDate(p); return d && d < today; });
-      const [showArchived, setShowArchived] = useState(false);
 
       const handleDelete = (id) => {
         deleteProject(id);
@@ -3342,6 +3344,127 @@
         const d = new Date(iso);
         return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) + ' ' +
                d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+      };
+
+      const getProjectStep = (project) => {
+        const fp = fullProjects[project.id];
+        const ad = fp?.appData || project.appData;
+        if (!ad) return 1;
+        const signoffs = ad.divisionSignoffs || {};
+        const pst = ad.pstData || [];
+        const divisions = [...new Set(pst.map(r => r.department).filter(Boolean))];
+        const s4Done = divisions.length > 0 && divisions.every(d => signoffs[d] && signoffs[d].length > 0);
+        if (s4Done) return 7;
+        if (ad.step3Complete) return 4;
+        if (ad.step2Complete) return 3;
+        if (ad.step1Complete) return 2;
+        return 1;
+      };
+
+      const checklistMilestoneIds = ['skuCountAlignment','merchPassOff','merchFinalReview','linesheetCreation','allocReserve','depthReview','allocDrop','allocNetsuiteImport','dcPackingStarts','truckBooking','dcDeparture','linesheetFinal','merchDelivery','openingDate'];
+
+      const getProjectCategory = (project) => {
+        const openDate = parseOpenDate(project);
+        if (!openDate || openDate >= today) return 'In Progress';
+        const fp = fullProjects[project.id];
+        const cc = fp?.appData?.proFormaData?.checklistComplete || {};
+        const allChecked = checklistMilestoneIds.every(id => !!cc[id]);
+        if (allChecked) return 'Completed';
+        return 'In Progress';
+      };
+
+      const getNextMilestone = (project) => {
+        const fp = fullProjects[project.id];
+        const pf = fp?.appData?.proFormaData || {};
+        const { rows } = computeChecklistRows(pf);
+        const cc = pf.checklistComplete || {};
+        const td2 = new Date(); td2.setHours(0,0,0,0);
+        for (const r of rows) {
+          if (!cc[r.id] && r.dateObj) {
+            const overdue = r.dateObj < td2;
+            const dateStr = (r.dateObj.getMonth()+1) + '/' + r.dateObj.getDate();
+            return { label: r.label, dateStr, overdue };
+          }
+        }
+        return null;
+      };
+
+      const getOpenDateDisplay = (project) => {
+        const d = parseOpenDate(project);
+        if (!d) return '—';
+        const cat = getProjectCategory(project);
+        const prefix = cat === 'Completed' ? 'Opened' : 'Opens';
+        return prefix + ' ' + (d.getMonth()+1) + '/' + d.getDate() + '/' + String(d.getFullYear()).slice(2);
+      };
+
+      const inProgressProjects = useMemo(() => filtered.filter(p => getProjectCategory(p) === 'In Progress'), [filtered, fullProjects]);
+      const completedProjects = useMemo(() => filtered.filter(p => getProjectCategory(p) === 'Completed'), [filtered, fullProjects]);
+
+      const categoryConfig = {
+        'In Progress': { color: 'green', dotClass: 'bg-green-600', borderClass: 'border-green-600', barColor: 'bg-green-600', projects: inProgressProjects },
+        'Completed': { color: 'gray', dotClass: 'bg-gray-400', borderClass: 'border-gray-400', barColor: 'bg-gray-400', projects: completedProjects },
+      };
+
+      const visibleCategories = statusFilter === 'all'
+        ? ['In Progress', 'Completed']
+        : [statusFilter];
+
+      const renderProjectRow = (project, catColor) => {
+        const step = getProjectStep(project);
+        const openDateStr = getOpenDateDisplay(project);
+        const next = getNextMilestone(project);
+        const cat = getProjectCategory(project);
+        const isCompleted = cat === 'Completed';
+        return (
+          <div key={project.id} className={`bg-white rounded-lg border border-gray-200 hover:border-gray-400 transition cursor-pointer ${isCompleted ? 'opacity-70' : ''}`}>
+            <div className="flex items-center px-4 py-3">
+              <div className="flex-1 min-w-0" onClick={() => onOpenProject(project.id)}>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-semibold text-gray-900 truncate">{project.storeName || 'Unnamed Store'}</span>
+                  <span className="text-xs text-gray-400">Step {step}/7</span>
+                </div>
+              </div>
+              <div className="text-xs text-gray-500 w-24 text-center flex-shrink-0">{openDateStr}</div>
+              <div className="w-28 flex gap-0.5 items-center mx-4 flex-shrink-0">
+                {[1,2,3,4,5,6,7].map(s => (
+                  <div key={s} className={`flex-1 h-1 rounded-full ${s <= step ? (isCompleted ? 'bg-gray-400' : catColor) : 'bg-gray-200'}`} />
+                ))}
+              </div>
+              <div className="w-48 flex-shrink-0 text-xs truncate">
+                {isCompleted ? (
+                  <span className="text-gray-400">All milestones complete</span>
+                ) : next ? (
+                  next.overdue ? (
+                    <span className="flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-red-500 flex-shrink-0" />
+                      <span className="text-red-600 font-medium truncate">Overdue: {next.label} — {next.dateStr}</span>
+                    </span>
+                  ) : (
+                    <span className="text-gray-400 truncate">Next: {next.label} — {next.dateStr}</span>
+                  )
+                ) : (
+                  <span className="text-gray-400">—</span>
+                )}
+              </div>
+              <div className="flex items-center gap-3 ml-3 flex-shrink-0">
+                <button onClick={(e) => { e.stopPropagation(); onOpenProject(project.id); }} className="text-xs font-semibold text-blue-600 hover:text-blue-800">Open</button>
+                <button onClick={(e) => { e.stopPropagation(); handleDuplicate(project); }} className="text-gray-400 hover:text-gray-600" title="Duplicate">
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="5" y="1" width="10" height="10" rx="2" stroke="currentColor" strokeWidth="1.2"/><rect x="1" y="5" width="10" height="10" rx="2" stroke="currentColor" strokeWidth="1.2" fill="white"/></svg>
+                </button>
+                {confirmDelete === project.id ? (
+                  <div className="flex items-center gap-1">
+                    <button onClick={(e) => { e.stopPropagation(); handleDelete(project.id); }} className="px-2 py-1 bg-red-600 text-white rounded text-xs font-bold hover:bg-red-700">Confirm</button>
+                    <button onClick={(e) => { e.stopPropagation(); setConfirmDelete(null); }} className="px-2 py-1 bg-gray-200 text-gray-700 rounded text-xs font-bold hover:bg-gray-300">Cancel</button>
+                  </div>
+                ) : (
+                  <button onClick={(e) => { e.stopPropagation(); setConfirmDelete(project.id); }} className="text-gray-400 hover:text-red-500" title="Delete">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M5.5 4V2.5a1 1 0 011-1h3a1 1 0 011 1V4M6.5 7v4M9.5 7v4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/><path d="M3.5 4l.8 9a1 1 0 001 .9h5.4a1 1 0 001-.9l.8-9" stroke="currentColor" strokeWidth="1.2"/></svg>
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        );
       };
 
       return (
@@ -3381,7 +3504,7 @@
 
           {/* Content */}
           <div className="max-w-6xl mx-auto px-8 py-8">
-            {/* Search & Stats */}
+            {/* Search & Filter */}
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-4">
                 <input
@@ -3391,7 +3514,25 @@
                   placeholder="Search stores..."
                   className="px-4 py-2 border border-gray-300 rounded-lg text-sm w-64 focus:outline-none focus:border-blue-400"
                 />
-                <span className="text-sm text-gray-500">{activeProjects.length} active{archivedProjects.length > 0 ? (' · ' + archivedProjects.length + ' archived') : ''}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                {[
+                  { key: 'all', label: 'All', count: filtered.length },
+                  { key: 'In Progress', label: 'In Progress', count: inProgressProjects.length },
+                  { key: 'Completed', label: 'Completed', count: completedProjects.length },
+                ].map(f => (
+                  <button
+                    key={f.key}
+                    onClick={() => setStatusFilter(f.key)}
+                    className={`px-3 py-1.5 rounded-full text-xs font-semibold transition ${
+                      statusFilter === f.key
+                        ? 'bg-gray-900 text-white'
+                        : 'bg-white text-gray-500 border border-gray-300 hover:border-gray-400'
+                    }`}
+                  >
+                    {f.label} ({f.count})
+                  </button>
+                ))}
               </div>
             </div>
 
@@ -3413,112 +3554,24 @@
                 )}
               </div>
             ) : (
-              <Fragment>
-              {/* Active Projects */}
-              {activeProjects.length > 0 && (
-                <div className="space-y-2">
-                  {activeProjects.map(project => (
-                    <div key={project.id} className="bg-white rounded-xl shadow-sm border border-gray-200 hover:shadow-md hover:border-gray-300 transition cursor-pointer">
-                    <div className="flex items-center px-6 py-4">
-                      {/* Store Name & Status */}
-                      <div className="flex-1 min-w-0" onClick={() => onOpenProject(project.id)}>
-                        <div className="flex items-center gap-3 mb-1">
-                          <h3 className="text-lg font-bold text-gray-900 truncate">{project.storeName || 'Unnamed Store'}</h3>
-                          <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold border ${statusColor(project.status)}`}>
-                            {project.status}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-4 text-xs text-gray-500">
-                          <span>Created: {formatDate(project.createdAt)}</span>
-                          <span>·</span>
-                          <span>Last saved: {formatDate(project.updatedAt)}</span>
-                        </div>
+              <div className="space-y-6">
+                {visibleCategories.map(cat => {
+                  const cfg = categoryConfig[cat];
+                  if (cfg.projects.length === 0) return null;
+                  return (
+                    <div key={cat}>
+                      <div className={`flex items-center gap-2 pb-2 mb-2 border-b-2 ${cfg.borderClass}`}>
+                        <span className={`w-2 h-2 rounded-full ${cfg.dotClass}`} />
+                        <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">{cat}</span>
+                        <span className="text-xs text-gray-400">({cfg.projects.length})</span>
                       </div>
-
-                      {/* Actions */}
-                      <div className="flex items-center gap-2 ml-4">
-                        <button
-                          onClick={(e) => { e.stopPropagation(); onOpenProject(project.id); }}
-                          className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700"
-                        >
-                          Open
-                        </button>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleDuplicate(project); }}
-                          className="px-3 py-2 bg-gray-100 text-gray-600 rounded-lg text-sm font-semibold hover:bg-gray-200"
-                          title="Duplicate"
-                        >
-                          ⧉
-                        </button>
-                        {confirmDelete === project.id ? (
-                          <div className="flex items-center gap-1">
-                            <button
-                              onClick={(e) => { e.stopPropagation(); handleDelete(project.id); }}
-                              className="px-3 py-2 bg-red-600 text-white rounded-lg text-xs font-bold hover:bg-red-700"
-                            >
-                              Confirm
-                            </button>
-                            <button
-                              onClick={(e) => { e.stopPropagation(); setConfirmDelete(null); }}
-                              className="px-3 py-2 bg-gray-200 text-gray-700 rounded-lg text-xs font-bold hover:bg-gray-300"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            onClick={(e) => { e.stopPropagation(); setConfirmDelete(project.id); }}
-                            className="px-3 py-2 bg-gray-100 text-red-500 rounded-lg text-sm font-semibold hover:bg-red-50"
-                            title="Delete"
-                          >
-                            ✕
-                          </button>
-                        )}
+                      <div className="space-y-1.5">
+                        {cfg.projects.map(p => renderProjectRow(p, cfg.barColor))}
                       </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
-              )}
-
-              {/* Archived Projects (opened stores) */}
-              {archivedProjects.length > 0 && (
-                <div className="mt-6">
-                  <button onClick={() => setShowArchived(!showArchived)} className="flex items-center gap-2 text-sm font-semibold text-gray-500 hover:text-gray-700 mb-2">
-                    <span className="text-xs">{showArchived ? '▼' : '▶'}</span>
-                    Archived — {archivedProjects.length} opened store{archivedProjects.length !== 1 ? 's' : ''}
-                  </button>
-                  {showArchived && (
-                    <div className="space-y-2 opacity-75">
-                      {archivedProjects.map(project => (
-                        <div key={project.id} className="bg-gray-50 rounded-xl shadow-sm border border-gray-200 hover:shadow-md transition cursor-pointer">
-                          <div className="flex items-center px-6 py-3">
-                            <div className="flex-1 min-w-0" onClick={() => onOpenProject(project.id)}>
-                              <div className="flex items-center gap-3 mb-1">
-                                <h3 className="text-base font-bold text-gray-600 truncate">{project.storeName || 'Unnamed Store'}</h3>
-                                <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-gray-200 text-gray-600 border border-gray-300">Opened</span>
-                              </div>
-                              <div className="text-xs text-gray-400">Last saved: {formatDate(project.updatedAt)}</div>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <button onClick={(e) => { e.stopPropagation(); onOpenProject(project.id); }} className="px-3 py-1.5 bg-gray-200 text-gray-600 rounded-lg text-xs font-semibold hover:bg-gray-300">Open</button>
-                              {confirmDelete === project.id ? (
-                                <div className="flex items-center gap-1">
-                                  <button onClick={(e) => { e.stopPropagation(); handleDelete(project.id); }} className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-xs font-bold hover:bg-red-700">Confirm</button>
-                                  <button onClick={(e) => { e.stopPropagation(); setConfirmDelete(null); }} className="px-3 py-1.5 bg-gray-200 text-gray-700 rounded-lg text-xs font-bold hover:bg-gray-300">Cancel</button>
-                                </div>
-                              ) : (
-                                <button onClick={(e) => { e.stopPropagation(); setConfirmDelete(project.id); }} className="px-3 py-1.5 bg-gray-100 text-red-500 rounded-lg text-xs font-semibold hover:bg-red-50" title="Delete">✕</button>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-              </Fragment>
             )}
 
             {/* Aggregated Checklist — Gantt-style view (active projects only) */}
