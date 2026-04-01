@@ -2532,11 +2532,12 @@
     const Step5 = ({ onNext, onPrev, onDataChange, data }) => {
       const [depthTargets, setDepthTargets] = useState(data.skuTargets || {});
       const [depthNotes, setDepthNotes] = useState({});
-      const [reservedUnits, setReservedUnits] = useState(data.reservedUnits || {});  // SKU → total quantity
-      const [reservedLoaded, setReservedLoaded] = useState(Object.keys(data.reservedUnits || {}).length > 0);
-      const reservedFileRef = useRef(null);
+      const [idealAllocation, setIdealAllocation] = useState(data.idealAllocation || {});
+      const [reservedUnits, setReservedUnits] = useState(data.reservedUnits || {});
+      const [dataLoaded, setDataLoaded] = useState(Object.keys(data.reservedUnits || {}).length > 0 || Object.keys(data.idealAllocation || {}).length > 0);
+      const fileRef = useRef(null);
 
-      const handleReservedUpload = (e) => {
+      const handleFileUpload = (e) => {
         const file = e.target.files[0];
         if (!file) return;
         const reader = new FileReader();
@@ -2546,35 +2547,50 @@
             const sheet = wb.Sheets[wb.SheetNames[0]];
             const rawData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
 
-            // Find header row with "Sku" and "Quantity"
+            // Find header row
             let headerIdx = 0;
             for (let i = 0; i < Math.min(5, rawData.length); i++) {
               const rowStr = (rawData[i] || []).map(c => String(c || '').toLowerCase()).join('|');
-              if (rowStr.includes('sku') && rowStr.includes('quantity')) { headerIdx = i; break; }
+              if (rowStr.includes('sku')) { headerIdx = i; break; }
             }
             const headers = (rawData[headerIdx] || []).map(h => String(h || '').trim().toLowerCase());
             const skuCol = headers.findIndex(h => h === 'sku');
-            const qtyCol = headers.findIndex(h => h === 'quantity');
+            const idealCol = headers.findIndex(h => h.includes('target') || h.includes('ideal'));
+            const reservedCol = headers.findIndex(h => h.includes('reserved') || h.includes('quantity'));
 
-            if (skuCol < 0 || qtyCol < 0) {
-              alert('Could not find SKU and Quantity columns in the Reserved Units file.');
+            if (skuCol < 0) {
+              alert('Could not find SKU column in the file.');
+              return;
+            }
+            if (idealCol < 0 && reservedCol < 0) {
+              alert('Could not find Target Allocation or Reserved Units columns. Expected headers containing "target" and/or "reserved" or "quantity".');
               return;
             }
 
-            // Sum quantity by SKU
-            const units = {};
+            const ideal = {};
+            const reserved = {};
             for (let i = headerIdx + 1; i < rawData.length; i++) {
               const row = rawData[i];
               if (!Array.isArray(row)) continue;
               const sku = String(row[skuCol] || '').trim();
-              const qty = parseInt(row[qtyCol]) || 0;
-              if (sku) units[sku] = (units[sku] || 0) + qty;
+              if (!sku) continue;
+              if (idealCol >= 0) {
+                const val = parseInt(row[idealCol]) || 0;
+                if (val) ideal[sku] = (ideal[sku] || 0) + val;
+              }
+              if (reservedCol >= 0) {
+                const val = parseInt(row[reservedCol]) || 0;
+                if (val) reserved[sku] = (reserved[sku] || 0) + val;
+              }
             }
-            setReservedUnits(units);
-            setReservedLoaded(true);
-            onDataChange({ ...data, reservedUnits: units });
+            const newIdeal = idealCol >= 0 ? ideal : idealAllocation;
+            const newReserved = reservedCol >= 0 ? reserved : reservedUnits;
+            setIdealAllocation(newIdeal);
+            setReservedUnits(newReserved);
+            setDataLoaded(true);
+            onDataChange({ ...data, idealAllocation: newIdeal, reservedUnits: newReserved });
           } catch (error) {
-            alert('Error parsing Reserved Units file: ' + error.message);
+            alert('Error parsing file: ' + error.message);
           }
         };
         reader.readAsArrayBuffer(file);
@@ -2608,31 +2624,36 @@
       const depthRows = useMemo(() => {
         const skuActions = data.skuActions || {};
         const rows = [];
-        const divisionOrder = ['Mens', 'Womens', 'Non Apparel', 'Kids', 'Accessories'];
+        const divisionOrder = ['Mens', 'Womens', 'Kids', 'Non Apparel'];
         const deptMap = {};
         const seenSkus = new Set();
+
+        const coreDepts = ['Mens', 'Womens', 'Kids'];
+        const normalizeDept = (d) => coreDepts.includes(d) ? d : 'Non Apparel';
 
         filteredData.forEach(row => {
           const action = skuActions[row.sku] || 'Keep';
           if (action === 'Drop') return;
-          if (seenSkus.has(row.sku)) return; // deduplicate — count each SKU only once
+          if (seenSkus.has(row.sku)) return;
           seenSkus.add(row.sku);
-          const dept = row.department || 'Other';
+          const dept = normalizeDept(row.department || 'Other');
           const cat = row.category || 'Other';
-          if (!deptMap[dept]) deptMap[dept] = { skus: 0, units: 0, cats: {} };
-          if (!deptMap[dept].cats[cat]) deptMap[dept].cats[cat] = { skus: 0, units: 0 };
+          if (!deptMap[dept]) deptMap[dept] = { skus: 0, idealUnits: 0, idealSkus: 0, reservedUnits: 0, reservedSkus: 0, cats: {} };
+          if (!deptMap[dept].cats[cat]) deptMap[dept].cats[cat] = { skus: 0, idealUnits: 0, idealSkus: 0, reservedUnits: 0, reservedSkus: 0 };
           deptMap[dept].skus++;
           deptMap[dept].cats[cat].skus++;
-          // Units from Reserved Units file (summed by SKU)
-          const units = reservedUnits[row.sku] || 0;
-          deptMap[dept].units += units;
-          deptMap[dept].cats[cat].units += units;
+          const iu = idealAllocation[row.sku] || 0;
+          const ru = reservedUnits[row.sku] || 0;
+          if (iu > 0) { deptMap[dept].idealUnits += iu; deptMap[dept].idealSkus++; deptMap[dept].cats[cat].idealUnits += iu; deptMap[dept].cats[cat].idealSkus++; }
+          if (ru > 0) { deptMap[dept].reservedUnits += ru; deptMap[dept].reservedSkus++; deptMap[dept].cats[cat].reservedUnits += ru; deptMap[dept].cats[cat].reservedSkus++; }
         });
 
-        let totalSkus = 0, totalUnits = 0;
-        Object.values(deptMap).forEach(d => { totalSkus += d.skus; totalUnits += d.units; });
+        let totalSkus = 0, totalIdealUnits = 0, totalIdealSkus = 0, totalReservedUnits = 0, totalReservedSkus = 0;
+        Object.values(deptMap).forEach(d => {
+          totalSkus += d.skus; totalIdealUnits += d.idealUnits; totalIdealSkus += d.idealSkus;
+          totalReservedUnits += d.reservedUnits; totalReservedSkus += d.reservedSkus;
+        });
 
-        // Build ordered rows
         const orderedDepts = Object.keys(deptMap).sort((a, b) => {
           const ai = divisionOrder.indexOf(a);
           const bi = divisionOrder.indexOf(b);
@@ -2642,30 +2663,25 @@
         orderedDepts.forEach(dept => {
           const d = deptMap[dept];
           rows.push({
-            key: dept,
-            label: dept.toUpperCase(),
-            isDivision: true,
-            skus: d.skus,
-            units: d.units,
+            key: dept, label: dept.toUpperCase(), isDivision: true,
+            skus: d.skus, idealUnits: d.idealUnits, idealSkus: d.idealSkus,
+            reservedUnits: d.reservedUnits, reservedSkus: d.reservedSkus,
             pctSku: totalSkus > 0 ? ((d.skus / totalSkus) * 100).toFixed(0) + '%' : '0%',
           });
           const cats = Object.keys(d.cats).sort();
           cats.forEach(cat => {
             const c = d.cats[cat];
             rows.push({
-              key: dept + '|' + cat,
-              label: cat,
-              isDivision: false,
-              parentDept: dept,
-              skus: c.skus,
-              units: c.units,
+              key: dept + '|' + cat, label: cat, isDivision: false, parentDept: dept,
+              skus: c.skus, idealUnits: c.idealUnits, idealSkus: c.idealSkus,
+              reservedUnits: c.reservedUnits, reservedSkus: c.reservedSkus,
               pctSku: totalSkus > 0 ? ((c.skus / totalSkus) * 100).toFixed(0) + '%' : '0%',
             });
           });
         });
 
-        return { rows, totalSkus, totalUnits };
-      }, [filteredData, data.skuActions, reservedUnits]);
+        return { rows, totalSkus, totalIdealUnits, totalIdealSkus, totalReservedUnits, totalReservedSkus };
+      }, [filteredData, data.skuActions, idealAllocation, reservedUnits]);
 
       // Sim store name for comparison column
       const simStoreName = data.simStore || data.proFormaData?.compStoreName || 'Sim Store';
@@ -2703,23 +2719,39 @@
         const exportData = depthRows.rows.map(row => ({
           Division: row.isDivision ? row.label : '',
           Category: row.isDivision ? '' : row.label,
-          'Target SKUs': depthTargets[row.key] || '',
+          'Plan Capacity': depthTargets[row.key] || '',
           'Plan SKU Count': row.skus,
           '% TTL SKU': row.pctSku,
-          Units: row.units,
+          'Target SKUs': row.idealSkus,
+          'Target Units': row.idealUnits,
+          'Target %TTL Units': depthRows.totalIdealUnits > 0 ? ((row.idealUnits / depthRows.totalIdealUnits) * 100).toFixed(0) + '%' : '—',
+          'Target Avg Depth': row.idealSkus > 0 ? Math.round(row.idealUnits / row.idealSkus) : '—',
+          'Reserved SKUs': row.reservedSkus,
+          'Reserved Units': row.reservedUnits,
+          'Reserved %TTL Units': depthRows.totalReservedUnits > 0 ? ((row.reservedUnits / depthRows.totalReservedUnits) * 100).toFixed(0) + '%' : '—',
+          'Reserved Avg Depth': row.reservedSkus > 0 ? Math.round(row.reservedUnits / row.reservedSkus) : '—',
+          'Unit Variance': row.idealUnits > 0 ? row.reservedUnits - row.idealUnits : '—',
+          '% Variance': row.idealUnits > 0 ? (((row.reservedUnits - row.idealUnits) / row.idealUnits) * 100).toFixed(0) + '%' : '—',
           Notes: depthNotes[row.key] || '',
         }));
         exportData.push({
-          Division: 'TOTAL', Category: '', 'Target SKUs': '',
-          'Plan SKU Count': depthRows.totalSkus,
-          '% TTL SKU': '100%',
-          Units: depthRows.totalUnits,
+          Division: 'TOTAL', Category: '',
+          'Plan Capacity': depthRows.rows.filter(r => r.isDivision).reduce((s, r) => s + (parseInt(depthTargets[r.key]) || 0), 0) || '',
+          'Plan SKU Count': depthRows.totalSkus, '% TTL SKU': '100%',
+          'Target SKUs': depthRows.totalIdealSkus, 'Target Units': depthRows.totalIdealUnits,
+          'Target %TTL Units': '100%',
+          'Target Avg Depth': depthRows.totalIdealSkus > 0 ? Math.round(depthRows.totalIdealUnits / depthRows.totalIdealSkus) : '—',
+          'Reserved SKUs': depthRows.totalReservedSkus, 'Reserved Units': depthRows.totalReservedUnits,
+          'Reserved %TTL Units': '100%',
+          'Reserved Avg Depth': depthRows.totalReservedSkus > 0 ? Math.round(depthRows.totalReservedUnits / depthRows.totalReservedSkus) : '—',
+          'Unit Variance': depthRows.totalIdealUnits > 0 ? depthRows.totalReservedUnits - depthRows.totalIdealUnits : '—',
+          '% Variance': depthRows.totalIdealUnits > 0 ? (((depthRows.totalReservedUnits - depthRows.totalIdealUnits) / depthRows.totalIdealUnits) * 100).toFixed(0) + '%' : '—',
           Notes: '',
         });
         const ws = XLSX.utils.json_to_sheet(exportData);
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, 'Depth Review');
-        XLSX.writeFile(wb, 'depth-review.xlsx');
+        XLSX.writeFile(wb, (data.proFormaData?.newStoreName || 'NSO').replace(/[^a-zA-Z0-9 ]/g, '').replace(/\s+/g, '_') + '_Depth_Review.xlsx');
       };
 
       return (
@@ -2756,40 +2788,42 @@
             </div>
           </div>
 
-          {/* Reserved Units Upload */}
-          <div className={`rounded-lg shadow-md p-4 ${reservedLoaded ? 'bg-green-50 border border-green-200' : 'bg-white'}`}>
+          {/* Allocation Data Upload */}
+          <div className={`rounded-lg shadow-md p-4 ${dataLoaded ? 'bg-green-50 border border-green-200' : 'bg-white'}`}>
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="text-sm font-bold text-gray-800">Reserved Units</h3>
+                <h3 className="text-sm font-bold text-gray-800">Target Allocation & Reserved Units</h3>
                 <p className="text-xs text-gray-500 mt-1">
-                  {reservedLoaded
-                    ? 'Loaded — ' + Object.keys(reservedUnits).length + ' SKUs with reserved units'
-                    : 'Upload the Reserved Units file to populate units and avg depth'}
+                  {dataLoaded
+                    ? 'Loaded — ' + Object.keys(idealAllocation).length + ' SKUs with target allocation, ' + Object.keys(reservedUnits).length + ' SKUs with reserved units'
+                    : 'Upload a file with columns: SKU, Target Allocation, Reserved Units'}
                 </p>
               </div>
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => {
                     const skus = filteredData.filter(r => (data.skuActions?.[r.sku] || 'Keep') !== 'Drop').map(r => r.sku);
-                    const ws = XLSX.utils.aoa_to_sheet([['SKU', 'Quantity'], ...skus.map(s => [s, ''])]);
-                    ws['!cols'] = [{ wch: 20 }, { wch: 12 }];
+                    const seen = new Set();
+                    const uniqueSkus = skus.filter(s => { if (seen.has(s)) return false; seen.add(s); return true; });
+                    const ws = XLSX.utils.aoa_to_sheet([['SKU', 'Ideal Allocation', 'Reserved Units'], ...uniqueSkus.map(s => [s, '', ''])]);
+                    ws['!cols'] = [{ wch: 20 }, { wch: 16 }, { wch: 16 }];
                     const wb = XLSX.utils.book_new();
-                    XLSX.utils.book_append_sheet(wb, ws, 'Reserved Units');
+                    XLSX.utils.book_append_sheet(wb, ws, 'Allocation');
                     const storeName = (data.proFormaData?.newStoreName || 'NSO').replace(/[^a-zA-Z0-9]/g, '_');
-                    XLSX.writeFile(wb, storeName + '_Reserved_Units_Template.xlsx');
+                    XLSX.writeFile(wb, storeName + '_Allocation_Template.xlsx');
                   }}
                   className="px-4 py-2 bg-gray-200 text-gray-700 rounded text-xs font-semibold hover:bg-gray-300"
                 >
                   Download Template
                 </button>
                 <button
-                  onClick={() => reservedFileRef.current?.click()}
-                  className={`px-4 py-2 rounded text-xs font-semibold ${reservedLoaded ? 'bg-green-600 text-white hover:bg-green-700' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
+                  onClick={() => fileRef.current?.click()}
+                  className={`px-4 py-2 rounded text-xs font-semibold ${dataLoaded ? 'bg-green-600 text-white hover:bg-green-700' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
                 >
-                  {reservedLoaded ? 'Reload File' : 'Upload Reserved Units (.xlsx)'}
+                  {dataLoaded ? 'Reload File' : 'Upload Allocation Data (.xlsx)'}
                 </button>
               </div>
-              <input ref={reservedFileRef} type="file" accept=".xlsx,.xls" onChange={handleReservedUpload} className="hidden" />
+              <input ref={fileRef} type="file" accept=".xlsx,.xls" onChange={handleFileUpload} className="hidden" />
             </div>
           </div>
 
@@ -2800,51 +2834,66 @@
                 <thead>
                   <tr className="bg-gray-700 text-white">
                     <th className="px-2 py-2 text-left font-bold" style={{minWidth:'140px'}}>DIVISION</th>
-                    <th className="px-2 py-2 text-center font-bold bg-yellow-600" colSpan={2}>TARGET</th>
-                    <th className="px-2 py-2 text-center font-bold bg-blue-800" colSpan={2}>TTL PLAN</th>
-                    <th className="px-2 py-2 text-center font-bold bg-blue-600" colSpan={5}>TOTAL BEFORE OPENING</th>
+                    <th className="px-2 py-2 text-center font-bold bg-blue-800" colSpan={3}>PLAN</th>
+                    <th className="px-2 py-2 text-center font-bold bg-indigo-700" colSpan={4}>TARGET ALLOCATION</th>
+                    <th className="px-2 py-2 text-center font-bold bg-teal-700" colSpan={4}>RESERVED UNITS</th>
+                    <th className="px-2 py-2 text-center font-bold bg-orange-700" colSpan={2}>VARIANCE</th>
                     <th className="px-2 py-2 text-center font-bold bg-gray-600">NOTES</th>
                   </tr>
                   <tr className="bg-gray-200 text-gray-700 border-b-2 border-gray-400">
                     <th className="px-2 py-1.5 text-left"></th>
-                    <th className="px-2 py-1.5 text-center bg-yellow-50">SKU Count</th>
-                    <th className="px-2 py-1.5 text-center bg-yellow-50">Units</th>
+                    <th className="px-2 py-1.5 text-center">Capacity</th>
                     <th className="px-2 py-1.5 text-center">SKU Count</th>
                     <th className="px-2 py-1.5 text-center">%TTL SKU</th>
-                    <th className="px-2 py-1.5 text-center">SKU Count</th>
-                    <th className="px-2 py-1.5 text-center">Units</th>
-                    <th className="px-2 py-1.5 text-center">%TTL SKU</th>
-                    <th className="px-2 py-1.5 text-center">%TTL Units</th>
-                    <th className="px-2 py-1.5 text-center">Avg Depth</th>
+                    <th className="px-2 py-1.5 text-center bg-indigo-50">SKUs</th>
+                    <th className="px-2 py-1.5 text-center bg-indigo-50">Units</th>
+                    <th className="px-2 py-1.5 text-center bg-indigo-50">%TTL Units</th>
+                    <th className="px-2 py-1.5 text-center bg-indigo-50">Avg Depth</th>
+                    <th className="px-2 py-1.5 text-center bg-teal-50">SKUs</th>
+                    <th className="px-2 py-1.5 text-center bg-teal-50">Units</th>
+                    <th className="px-2 py-1.5 text-center bg-teal-50">%TTL Units</th>
+                    <th className="px-2 py-1.5 text-center bg-teal-50">Avg Depth</th>
+                    <th className="px-2 py-1.5 text-center bg-orange-50">Units</th>
+                    <th className="px-2 py-1.5 text-center bg-orange-50">%</th>
                     <th className="px-2 py-1.5 text-center"></th>
                   </tr>
                 </thead>
                 <tbody>
                   {depthRows.rows.map((row, idx) => {
-                    const targetSku = parseInt(depthTargets[row.key]) || 0;
-                    const variance = targetSku ? row.skus - targetSku : null;
-                    const avgDepth = reservedLoaded && row.skus > 0 ? (row.units / row.skus).toFixed(0) : '—';
-                    const pctUnits = reservedLoaded && depthRows.totalUnits > 0 ? ((row.units / depthRows.totalUnits) * 100).toFixed(0) + '%' : '—';
-                    const displayUnits = reservedLoaded ? row.units : '—';
+                    const idealAvg = row.idealSkus > 0 ? Math.round(row.idealUnits / row.idealSkus) : '—';
+                    const pctIdealUnits = dataLoaded && depthRows.totalIdealUnits > 0 ? ((row.idealUnits / depthRows.totalIdealUnits) * 100).toFixed(0) + '%' : '—';
+                    const reservedAvg = row.reservedSkus > 0 ? Math.round(row.reservedUnits / row.reservedSkus) : '—';
+                    const pctReservedUnits = dataLoaded && depthRows.totalReservedUnits > 0 ? ((row.reservedUnits / depthRows.totalReservedUnits) * 100).toFixed(0) + '%' : '—';
+                    const unitVar = row.idealUnits > 0 ? row.reservedUnits - row.idealUnits : null;
+                    const pctVar = row.idealUnits > 0 ? (((row.reservedUnits - row.idealUnits) / row.idealUnits) * 100).toFixed(0) : null;
+                    const displayReserved = dataLoaded ? row.reservedUnits : '—';
 
                     return (
                       <tr key={row.key} className={`border-b border-gray-200 ${row.isDivision ? 'bg-blue-50 font-bold' : 'hover:bg-gray-50'}`}>
                         <td className={`px-2 py-1.5 ${row.isDivision ? 'font-bold text-gray-900' : 'pl-6 text-gray-700'}`}>
                           {row.label}
                         </td>
-                        <td className="px-1 py-1 text-center bg-yellow-50">
+                        <td className="px-1 py-1 text-center">
                           {row.isDivision && (
                             <input type="number" value={depthTargets[row.key] || ''} onChange={(e) => setDepthTargets(t => ({...t, [row.key]: e.target.value}))} className="w-14 px-1 py-0.5 border border-gray-300 rounded text-xs text-center" placeholder="—" />
                           )}
                         </td>
-                        <td className="px-1 py-1 text-center bg-yellow-50"></td>
                         <td className={`px-2 py-1.5 text-center ${row.isDivision ? 'font-bold' : ''}`}>{row.skus}</td>
                         <td className="px-2 py-1.5 text-center">{row.pctSku}</td>
-                        <td className={`px-2 py-1.5 text-center ${row.isDivision ? 'font-bold' : ''}`}>{row.skus}</td>
-                        <td className={`px-2 py-1.5 text-center ${row.isDivision ? 'font-bold' : ''}`}>{displayUnits}</td>
-                        <td className="px-2 py-1.5 text-center">{row.pctSku}</td>
-                        <td className="px-2 py-1.5 text-center">{pctUnits}</td>
-                        <td className="px-2 py-1.5 text-center">{avgDepth}</td>
+                        <td className={`px-2 py-1.5 text-center bg-indigo-50 ${row.isDivision ? 'font-bold' : ''}`}>{dataLoaded ? row.idealSkus : '—'}</td>
+                        <td className={`px-2 py-1.5 text-center bg-indigo-50 ${row.isDivision ? 'font-bold' : ''}`}>{dataLoaded ? row.idealUnits : '—'}</td>
+                        <td className="px-2 py-1.5 text-center bg-indigo-50">{pctIdealUnits}</td>
+                        <td className="px-2 py-1.5 text-center bg-indigo-50">{idealAvg}</td>
+                        <td className={`px-2 py-1.5 text-center bg-teal-50 ${row.isDivision ? 'font-bold' : ''}`}>{dataLoaded ? row.reservedSkus : '—'}</td>
+                        <td className={`px-2 py-1.5 text-center bg-teal-50 ${row.isDivision ? 'font-bold' : ''}`}>{displayReserved}</td>
+                        <td className="px-2 py-1.5 text-center bg-teal-50">{pctReservedUnits}</td>
+                        <td className="px-2 py-1.5 text-center bg-teal-50">{reservedAvg}</td>
+                        <td className={`px-2 py-1.5 text-center bg-orange-50 ${unitVar !== null ? (unitVar < 0 ? 'text-red-600 font-semibold' : unitVar > 0 ? 'text-green-600 font-semibold' : '') : ''}`}>
+                          {unitVar !== null ? (unitVar > 0 ? '+' : '') + unitVar : '—'}
+                        </td>
+                        <td className={`px-2 py-1.5 text-center bg-orange-50 ${pctVar !== null ? (parseInt(pctVar) < 0 ? 'text-red-600' : parseInt(pctVar) > 0 ? 'text-green-600' : '') : ''}`}>
+                          {pctVar !== null ? (parseInt(pctVar) > 0 ? '+' : '') + pctVar + '%' : '—'}
+                        </td>
                         <td className="px-1 py-1 text-center">
                           <input type="text" value={depthNotes[row.key] || ''} onChange={(e) => setDepthNotes(n => ({...n, [row.key]: e.target.value}))} className="w-full px-1 py-0.5 border border-gray-200 rounded text-xs" placeholder="" />
                         </td>
@@ -2855,14 +2904,26 @@
                   <tr className="bg-gray-800 text-white font-bold border-t-2 border-gray-600">
                     <td className="px-2 py-2">TOTAL</td>
                     <td className="px-2 py-2 text-center">{depthRows.rows.filter(r => r.isDivision).reduce((s, r) => s + (parseInt(depthTargets[r.key]) || 0), 0) || '—'}</td>
-                    <td className="px-2 py-2 text-center"></td>
                     <td className="px-2 py-2 text-center">{depthRows.totalSkus}</td>
                     <td className="px-2 py-2 text-center">100%</td>
-                    <td className="px-2 py-2 text-center">{depthRows.totalSkus}</td>
-                    <td className="px-2 py-2 text-center">{reservedLoaded ? depthRows.totalUnits : '—'}</td>
-                    <td className="px-2 py-2 text-center">100%</td>
-                    <td className="px-2 py-2 text-center">{reservedLoaded ? '100%' : '—'}</td>
-                    <td className="px-2 py-2 text-center">{reservedLoaded && depthRows.totalSkus > 0 ? (depthRows.totalUnits / depthRows.totalSkus).toFixed(0) : '—'}</td>
+                    <td className="px-2 py-2 text-center">{dataLoaded ? depthRows.totalIdealSkus : '—'}</td>
+                    <td className="px-2 py-2 text-center">{dataLoaded ? depthRows.totalIdealUnits : '—'}</td>
+                    <td className="px-2 py-2 text-center">{dataLoaded ? '100%' : '—'}</td>
+                    <td className="px-2 py-2 text-center">{dataLoaded && depthRows.totalIdealSkus > 0 ? Math.round(depthRows.totalIdealUnits / depthRows.totalIdealSkus) : '—'}</td>
+                    <td className="px-2 py-2 text-center">{dataLoaded ? depthRows.totalReservedSkus : '—'}</td>
+                    <td className="px-2 py-2 text-center">{dataLoaded ? depthRows.totalReservedUnits : '—'}</td>
+                    <td className="px-2 py-2 text-center">{dataLoaded ? '100%' : '—'}</td>
+                    <td className="px-2 py-2 text-center">{dataLoaded && depthRows.totalReservedSkus > 0 ? Math.round(depthRows.totalReservedUnits / depthRows.totalReservedSkus) : '—'}</td>
+                    {(() => {
+                      const tv = depthRows.totalIdealUnits > 0 ? depthRows.totalReservedUnits - depthRows.totalIdealUnits : null;
+                      const tp = depthRows.totalIdealUnits > 0 ? (((depthRows.totalReservedUnits - depthRows.totalIdealUnits) / depthRows.totalIdealUnits) * 100).toFixed(0) : null;
+                      return (
+                        <Fragment>
+                          <td className={`px-2 py-2 text-center ${tv !== null ? (tv < 0 ? 'text-red-300' : tv > 0 ? 'text-green-300' : '') : ''}`}>{tv !== null ? (tv > 0 ? '+' : '') + tv : '—'}</td>
+                          <td className={`px-2 py-2 text-center ${tp !== null ? (parseInt(tp) < 0 ? 'text-red-300' : parseInt(tp) > 0 ? 'text-green-300' : '') : ''}`}>{tp !== null ? (parseInt(tp) > 0 ? '+' : '') + tp + '%' : '—'}</td>
+                        </Fragment>
+                      );
+                    })()}
                     <td className="px-2 py-2 text-center"></td>
                   </tr>
                 </tbody>
@@ -3490,6 +3551,7 @@
       },
       pstData: [], selectedDeliveries: [], selectedGroups: [],
       skuActions: {}, assignedTiers: {}, simStore: '', skuTargets: {},
+      idealAllocation: {}, reservedUnits: {},
       step1Complete: false, step2Complete: false, step3Complete: false,
     });
 
