@@ -1549,15 +1549,19 @@
               }
             }
 
-            // Find all delivery months from PST that match the season
+            // Find all delivery months from PST that match the season — store as "Season:Month" compound keys
             let autoSelectedDeliveries = [];
             if (asstQtr && seasonMonths[asstQtr]) {
               const baseMonths = seasonMonths[asstQtr];
-              const allDeliveryMonths = [...new Set(parsed.map(r => String(r.deliveryMonth || '').trim()).filter(Boolean))];
-              autoSelectedDeliveries = allDeliveryMonths.filter(dm => {
-                // Strip _2, _3 etc. to get base month, then lowercase compare
+              parsed.forEach(r => {
+                const dm = String(r.deliveryMonth || '').trim();
+                const sc = String(r.seasonCode || '').trim();
+                if (!dm || !sc) return;
                 const base = dm.replace(/_\d+$/, '').toLowerCase();
-                return baseMonths.includes(base);
+                if (baseMonths.includes(base)) {
+                  const key = `${sc}:${dm}`;
+                  if (!autoSelectedDeliveries.includes(key)) autoSelectedDeliveries.push(key);
+                }
               });
             }
 
@@ -1611,34 +1615,44 @@
         return seasons;
       }, [data.pstData]);
 
+      // Compound key helpers — "Season:Month" so Oct in Fall != Oct in Holiday
+      const makeDeliveryKey = (season, month) => `${season}:${month}`;
+      // Backward-compat: old saves may have plain month strings
+      const isKeySelected = (selected, season, month) =>
+        selected.includes(makeDeliveryKey(season, month)) || selected.includes(month);
+
       const handleSeasonToggle = (season) => {
         const current = data.selectedDeliveries || [];
-        const seasonDeliveries = Object.keys(seasonData[season]?.deliveries || {});
-        const allSelected = seasonDeliveries.every(d => current.includes(d));
-
+        const seasonMonthKeys = Object.keys(seasonData[season]?.deliveries || {}).map(m => makeDeliveryKey(season, m));
+        const allSelected = seasonMonthKeys.every(k => current.includes(k));
         let updated;
         if (allSelected) {
-          updated = current.filter(d => !seasonDeliveries.includes(d));
+          updated = current.filter(k => !seasonMonthKeys.includes(k));
         } else {
-          const newSet = new Set([...current, ...seasonDeliveries]);
+          const newSet = new Set([...current, ...seasonMonthKeys]);
           updated = Array.from(newSet);
         }
         onDataChange({ ...data, selectedDeliveries: updated, selectedSeason: allSelected ? '' : season });
       };
 
-      const handleDeliveryToggle = (delivery) => {
+      const handleDeliveryToggle = (season, month) => {
+        const key = makeDeliveryKey(season, month);
         const current = data.selectedDeliveries || [];
-        const updated = current.includes(delivery)
-          ? current.filter(d => d !== delivery)
-          : [...current, delivery];
+        // Remove legacy plain-string version when toggling
+        const updated = current.includes(key)
+          ? current.filter(k => k !== key)
+          : [...current.filter(k => k !== month), key];
         onDataChange({ ...data, selectedDeliveries: updated });
       };
 
       const selectedSkuCount = useMemo(() => {
         if (!data.selectedDeliveries || data.selectedDeliveries.length === 0) return 0;
+        const sel = data.selectedDeliveries;
         return (data.pstData || []).filter(row => {
           const dm = String(row.deliveryMonth || '').trim();
-          return data.selectedDeliveries.includes(dm);
+          const sc = String(row.seasonCode || '').trim();
+          // Match compound "Season:Month" keys or legacy plain month strings
+          return sel.includes(`${sc}:${dm}`) || sel.includes(dm);
         }).length;
       }, [data.pstData, data.selectedDeliveries]);
 
@@ -1697,9 +1711,9 @@
               {Object.entries(seasonData).map(([season, sData]) => {
                 const monthKeys = Object.keys(sData.deliveries);
                 const currentSelected = data.selectedDeliveries || [];
-                const allChecked = monthKeys.length > 0 && monthKeys.every(d => currentSelected.includes(d));
-                const someChecked = monthKeys.some(d => currentSelected.includes(d));
-                const checkedCount = monthKeys.filter(d => currentSelected.includes(d)).length;
+                const allChecked = monthKeys.length > 0 && monthKeys.every(m => isKeySelected(currentSelected, season, m));
+                const someChecked = monthKeys.some(m => isKeySelected(currentSelected, season, m));
+                const checkedCount = monthKeys.filter(m => isKeySelected(currentSelected, season, m)).length;
 
                 return (
                   <div key={season} className="bg-white rounded-lg shadow-md overflow-hidden">
@@ -1727,12 +1741,14 @@
 
                     {/* Individual Delivery Months */}
                     <div className="p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                      {monthKeys.map(month => (
-                        <label key={month} className={`flex items-start space-x-3 p-3 border rounded-lg cursor-pointer transition ${currentSelected.includes(month) ? 'border-blue-400 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'}`}>
+                      {monthKeys.map(month => {
+                        const checked = isKeySelected(currentSelected, season, month);
+                        return (
+                        <label key={month} className={`flex items-start space-x-3 p-3 border rounded-lg cursor-pointer transition ${checked ? 'border-blue-400 bg-blue-50' : 'border-gray-200 hover:bg-gray-50'}`}>
                           <input
                             type="checkbox"
-                            checked={currentSelected.includes(month)}
-                            onChange={() => handleDeliveryToggle(month)}
+                            checked={checked}
+                            onChange={() => handleDeliveryToggle(season, month)}
                             className="w-4 h-4 text-blue-600 border-gray-300 rounded cursor-pointer mt-0.5"
                           />
                           <div className="flex-1 min-w-0">
@@ -1741,7 +1757,8 @@
                             <div className="text-xs text-gray-400 truncate">{Array.from(sData.deliveries[month].categories).join(', ')}</div>
                           </div>
                         </label>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 );
@@ -1758,7 +1775,7 @@
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-6">
               <h3 className="text-lg font-bold text-gray-800 mb-2">Selection Summary</h3>
               <div className="text-sm text-gray-700 space-y-1">
-                <p>Selected delivery months: <span className="font-semibold">{(data.selectedDeliveries || []).join(', ')}</span></p>
+                <p>Selected delivery months: <span className="font-semibold">{(data.selectedDeliveries || []).map(k => k.includes(':') ? k.split(':')[1] : k).join(', ')}</span></p>
                 <p>Total SKUs in selection: <span className="font-bold text-lg text-blue-700">{selectedSkuCount}</span></p>
               </div>
             </div>
@@ -1826,6 +1843,7 @@
         const matched = (data.pstData || []).filter(row => {
           const dm = String(row.deliveryMonth || '').trim();
           const matchesDelivery = selectedDeliveries.length === 0 ||
+            selectedDeliveries.includes(`${String(row.seasonCode||'').trim()}:${dm}`) ||
             selectedDeliveries.includes(dm);
           const matchesTier = selectedGroups.length === 0 ||
             selectedGroups.includes(row.storeTier) ||
@@ -2606,6 +2624,7 @@
         const matched = (data.pstData || []).filter(row => {
           const dm = String(row.deliveryMonth || '').trim();
           const matchesDelivery = selectedDeliveries.length === 0 ||
+            selectedDeliveries.includes(`${String(row.seasonCode||'').trim()}:${dm}`) ||
             selectedDeliveries.includes(dm);
           const matchesTier = selectedGroups.length === 0 ||
             selectedGroups.includes(row.storeTier) ||
