@@ -3050,6 +3050,7 @@
       const truckBooking = addDays(dcDeparture, -1);
       const dcPackingStarts = addDays(dcDeparture, -7);
       const allocNetsuiteImport = allocDrop;
+      const finalAllocDrop = addDays(dcPackingStarts, -2);
 
       const baseRows = [
         { id: 'skuCountAlignment', label: 'SKU Count Alignment', calcDate: skuCountAlignment, hint: 'Merch Pass Off - 14 days' },
@@ -3060,6 +3061,7 @@
         { id: 'depthReview', label: 'Depth Review', calcDate: depthReview, hint: 'Alloc Drop - 7 days' },
         { id: 'allocDrop', label: 'Allocation Drop Date', calcDate: allocDrop, hint: 'Merch Delivery - 18 days' },
         { id: 'allocNetsuiteImport', label: 'Alloc Netsuite Import', calcDate: allocNetsuiteImport, hint: 'Same as Alloc Drop' },
+        { id: 'finalAllocDrop', label: 'Final Allocation Drop', calcDate: finalAllocDrop, hint: 'DC Packing Starts - 2 days' },
         { id: 'dcPackingStarts', label: 'DC Packing Starts', calcDate: dcPackingStarts, hint: 'DC Departure - 7 days' },
         { id: 'truckBooking', label: 'Truck Booking', calcDate: truckBooking, hint: 'DC Departure - 1 day' },
         { id: 'dcDeparture', label: 'DC Departure', calcDate: dcDeparture, hint: 'Merch Delivery - ' + transitDays + ' days (transit)' },
@@ -3088,6 +3090,18 @@
         row.displayDate = row.calcDate ? fmtDate(row.calcDate) : '—';
         row.dateObj = row.calcDate;
       });
+
+      // Sort by date ascending, readonly text rows stay at the bottom
+      const dateRows = rows.filter(r => !r.readonly);
+      const readonlyRows = rows.filter(r => r.readonly);
+      dateRows.sort((a, b) => {
+        if (!a.dateObj && !b.dateObj) return 0;
+        if (!a.dateObj) return 1;
+        if (!b.dateObj) return -1;
+        return a.dateObj - b.dateObj;
+      });
+      rows.length = 0;
+      rows.push(...dateRows, ...readonlyRows);
 
       return { rows, baseRows, customRows, parseDate, fmtDate, dateOverrides };
     };
@@ -3227,6 +3241,7 @@
                     depthReview: 'Store Planning',
                     allocDrop: 'Allocation',
                     allocNetsuiteImport: 'Ops',
+                    finalAllocDrop: 'Allocation',
                     dcPackingStarts: 'Ops',
                     truckBooking: 'Ops',
                     dcDeparture: 'Ops',
@@ -3744,7 +3759,7 @@
         return 1;
       };
 
-      const checklistMilestoneIds = ['skuCountAlignment','merchPassOff','merchFinalReview','linesheetCreation','allocReserve','depthReview','allocDrop','allocNetsuiteImport','dcPackingStarts','truckBooking','dcDeparture','linesheetFinal','merchDelivery','openingDate'];
+      const checklistMilestoneIds = ['skuCountAlignment','merchPassOff','merchFinalReview','linesheetCreation','allocReserve','depthReview','allocDrop','allocNetsuiteImport','finalAllocDrop','dcPackingStarts','linesheetFinal','truckBooking','dcDeparture','merchDelivery','openingDate'];
 
       const getProjectCategory = (project) => {
         const openDate = parseOpenDate(project);
@@ -3970,8 +3985,8 @@
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="text-lg font-bold text-gray-800 font-display">Checklist Overview</h3>
                   <button onClick={() => {
-                    const mIds = ['skuCountAlignment','merchPassOff','merchFinalReview','linesheetCreation','allocReserve','depthReview','allocDrop','allocNetsuiteImport','dcPackingStarts','truckBooking','dcDeparture','linesheetFinal','merchDelivery','openingDate'];
-                    const mLabels = { skuCountAlignment:'SKU Count Alignment', merchPassOff:'Merch Pass Off', merchFinalReview:'Merch Final Review', linesheetCreation:'Linesheet Creation', allocReserve:'Allocation Reserve', depthReview:'Depth Review', allocDrop:'Allocation Drop Date', allocNetsuiteImport:'Alloc Netsuite Import', dcPackingStarts:'DC Packing Starts', truckBooking:'Truck Booking', dcDeparture:'DC Departure', linesheetFinal:'Linesheet Creation - FINAL', merchDelivery:'Merch Delivery Date', openingDate:'Opening Date' };
+                    const mIds = ['skuCountAlignment','merchPassOff','merchFinalReview','linesheetCreation','allocReserve','depthReview','allocDrop','allocNetsuiteImport','finalAllocDrop','dcPackingStarts','linesheetFinal','truckBooking','dcDeparture','merchDelivery','openingDate'];
+                    const mLabels = { skuCountAlignment:'SKU Count Alignment', merchPassOff:'Merch Pass Off', merchFinalReview:'Merch Final Review', linesheetCreation:'Linesheet Creation', allocReserve:'Allocation Reserve', depthReview:'Depth Review', allocDrop:'Allocation Drop Date', allocNetsuiteImport:'Alloc Netsuite Import', finalAllocDrop:'Final Allocation Drop', dcPackingStarts:'DC Packing Starts', truckBooking:'Truck Booking', dcDeparture:'DC Departure', linesheetFinal:'Linesheet Creation - FINAL', merchDelivery:'Merch Delivery Date', openingDate:'Opening Date' };
                     const td = new Date(); td.setHours(0,0,0,0);
                     const exportRows = [];
                     mIds.forEach(id => {
@@ -3998,8 +4013,8 @@
                 </div>
                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-x-auto">
                   {(() => {
-                    const mIds = ['skuCountAlignment','merchPassOff','merchFinalReview','linesheetCreation','allocReserve','depthReview','allocDrop','allocNetsuiteImport','dcPackingStarts','truckBooking','dcDeparture','linesheetFinal','merchDelivery','openingDate'];
-                    const mLabels = { skuCountAlignment:'SKU Count Alignment', merchPassOff:'Merch Pass Off', merchFinalReview:'Merch Final Review', linesheetCreation:'Linesheet Creation', allocReserve:'Allocation Reserve', depthReview:'Depth Review', allocDrop:'Allocation Drop Date', allocNetsuiteImport:'Alloc Netsuite Import', dcPackingStarts:'DC Packing Starts', truckBooking:'Truck Booking', dcDeparture:'DC Departure', linesheetFinal:'Linesheet Creation - FINAL', merchDelivery:'Merch Delivery Date', openingDate:'Opening Date' };
+                    const mIds = ['skuCountAlignment','merchPassOff','merchFinalReview','linesheetCreation','allocReserve','depthReview','allocDrop','allocNetsuiteImport','finalAllocDrop','dcPackingStarts','linesheetFinal','truckBooking','dcDeparture','merchDelivery','openingDate'];
+                    const mLabels = { skuCountAlignment:'SKU Count Alignment', merchPassOff:'Merch Pass Off', merchFinalReview:'Merch Final Review', linesheetCreation:'Linesheet Creation', allocReserve:'Allocation Reserve', depthReview:'Depth Review', allocDrop:'Allocation Drop Date', allocNetsuiteImport:'Alloc Netsuite Import', finalAllocDrop:'Final Allocation Drop', dcPackingStarts:'DC Packing Starts', truckBooking:'Truck Booking', dcDeparture:'DC Departure', linesheetFinal:'Linesheet Creation - FINAL', merchDelivery:'Merch Delivery Date', openingDate:'Opening Date' };
                     const td = new Date(); td.setHours(0,0,0,0);
 
                     const handleAggToggle = (projectId, milestoneId) => {
@@ -4026,6 +4041,7 @@
                       depthReview: 'Store Planning',
                       allocDrop: 'Allocation',
                       allocNetsuiteImport: 'Ops',
+                      finalAllocDrop: 'Allocation',
                       dcPackingStarts: 'Ops',
                       truckBooking: 'Ops',
                       dcDeparture: 'Ops',
