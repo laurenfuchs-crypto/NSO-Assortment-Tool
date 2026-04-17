@@ -3524,7 +3524,6 @@
       try {
         const slim = projects.map(p => ({
           id: p.id, storeName: p.storeName, status: p.status,
-          isSpecial: !!p.isSpecial,
           createdAt: p.createdAt, updatedAt: p.updatedAt,
         }));
         localStorage.setItem(CACHE_KEY, JSON.stringify(slim));
@@ -3545,11 +3544,8 @@
           if (!res.ok) return null;
         }
         const rows = await res.json();
-        const existingCache = loadDashboardCache();
-        const cacheMap = Object.fromEntries(existingCache.map(p => [p.id, p]));
         const projects = rows.map(r => ({
           id: r.id, storeName: r.store_name || '', status: r.status || '',
-          isSpecial: !!cacheMap[r.id]?.isSpecial,
           createdAt: r.created_at || '', updatedAt: r.updated_at || r.created_at || '',
         }));
         saveDashboardCache(projects);
@@ -3582,7 +3578,7 @@
       // Update dashboard cache (slim — no appData)
       let cache = loadDashboardCache();
       const idx = cache.findIndex(p => p.id === projectId);
-      const cacheEntry = { id: projectId, storeName, status, isSpecial: !!appData.isSpecial, createdAt: idx >= 0 ? (cache[idx].createdAt || now) : now, updatedAt: now };
+      const cacheEntry = { id: projectId, storeName, status, createdAt: idx >= 0 ? (cache[idx].createdAt || now) : now, updatedAt: now };
       if (idx >= 0) { cache[idx] = cacheEntry; } else { cache.push(cacheEntry); }
       saveDashboardCache(cache);
 
@@ -3601,7 +3597,7 @@
         }
       } catch (e) { console.error('Save error:', e); }
 
-      return { id: projectId, storeName, status, isSpecial: !!appData.isSpecial, createdAt: cacheEntry.createdAt, updatedAt: now, appData };
+      return { id: projectId, storeName, status, createdAt: cacheEntry.createdAt, updatedAt: now, appData };
     };
 
     // Delete project
@@ -3663,7 +3659,6 @@
       const [confirmDelete, setConfirmDelete] = useState(null);
       const [syncing, setSyncing] = useState(false);
       const [statusFilter, setStatusFilter] = useState('all');
-      const [includeSpecialInChecklist, setIncludeSpecialInChecklist] = useState(false);
 
       const doSync = async () => {
         setSyncing(true);
@@ -3679,12 +3674,6 @@
               if (r.status === 'fulfilled' && r.value) map[r.value.id] = r.value;
             });
             setFullProjects(map);
-            // Sync isSpecial from full data into slim cache (authoritative source = appData)
-            setProjects(prev => {
-              const updated = prev.map(p => ({ ...p, isSpecial: !!map[p.id]?.appData?.isSpecial }));
-              saveDashboardCache(updated);
-              return updated;
-            });
           }
         } catch (e) { console.error('doSync error:', e); }
         setSyncing(false);
@@ -3711,7 +3700,6 @@
       };
       const activeProjects = useMemo(() => {
         return filtered.filter(p => { const d = parseOpenDate(p); return !d || d >= today; })
-          .filter(p => includeSpecialInChecklist || !isProjectSpecial(p))
           .sort((a, b) => {
             const da = parseOpenDate(a);
             const db = parseOpenDate(b);
@@ -3720,7 +3708,7 @@
             if (!db) return -1;
             return da - db;
           });
-      }, [filtered, fullProjects, includeSpecialInChecklist]);
+      }, [filtered, fullProjects]);
 
       const handleDelete = (id) => {
         deleteProject(id);
@@ -3737,24 +3725,6 @@
         dupData.divisionSignoffs = {};
         saveProject(newId, dupData);
         doSync();
-      };
-
-      const handleToggleSpecial = async (project) => {
-        let appData = fullProjects[project.id]?.appData;
-        if (!appData) {
-          const full = await remoteLoadProject(project.id);
-          appData = full?.appData;
-          if (!appData) { alert('Could not load project data'); return; }
-        }
-        const newAppData = { ...appData, isSpecial: !appData.isSpecial };
-        // Optimistic UI update
-        setFullProjects(prev => ({
-          ...prev,
-          [project.id]: { ...(prev[project.id] || {}), appData: newAppData },
-        }));
-        setProjects(prev => prev.map(p => p.id === project.id ? { ...p, isSpecial: newAppData.isSpecial } : p));
-        // Persist to Supabase + slim cache
-        await saveProject(project.id, newAppData);
       };
 
       const statusColor = (status) => {
@@ -3791,14 +3761,7 @@
 
       const checklistMilestoneIds = ['skuCountAlignment','merchPassOff','merchFinalReview','linesheetCreation','allocReserve','depthReview','allocDrop','allocNetsuiteImport','finalAllocDrop','dcPackingStarts','linesheetFinal','truckBooking','dcDeparture','merchDelivery','openingDate'];
 
-      const isProjectSpecial = (project) => {
-        const fp = fullProjects[project.id];
-        // Prefer authoritative value from loaded appData; fall back to slim cache
-        return fp?.appData?.isSpecial ?? project.isSpecial ?? false;
-      };
-
       const getProjectCategory = (project) => {
-        if (isProjectSpecial(project)) return 'Special Projects';
         const openDate = parseOpenDate(project);
         if (!openDate || openDate >= today) return 'In Progress';
         const fp = fullProjects[project.id];
@@ -3841,16 +3804,14 @@
       };
       const inProgressProjects = useMemo(() => filtered.filter(p => getProjectCategory(p) === 'In Progress').sort(sortByOpenDate), [filtered, fullProjects]);
       const completedProjects = useMemo(() => filtered.filter(p => getProjectCategory(p) === 'Completed').sort(sortByOpenDate), [filtered, fullProjects]);
-      const specialProjects = useMemo(() => filtered.filter(p => getProjectCategory(p) === 'Special Projects').sort(sortByOpenDate), [filtered, fullProjects]);
 
       const categoryConfig = {
         'In Progress': { color: 'green', dotClass: 'bg-green-600', borderClass: 'border-green-600', barColor: 'bg-green-600', projects: inProgressProjects },
-        'Special Projects': { color: 'gold', dotClass: 'bg-[#C9A961]', borderClass: 'border-[#C9A961]', barColor: 'bg-[#C9A961]', projects: specialProjects },
         'Completed': { color: 'gray', dotClass: 'bg-gray-400', borderClass: 'border-gray-400', barColor: 'bg-gray-400', projects: completedProjects },
       };
 
       const visibleCategories = statusFilter === 'all'
-        ? ['In Progress', 'Special Projects', 'Completed']
+        ? ['In Progress', 'Completed']
         : [statusFilter];
 
       const renderProjectRow = (project, catColor) => {
@@ -3892,13 +3853,6 @@
               </div>
               <div className="flex items-center gap-3 ml-3 flex-shrink-0">
                 <button onClick={(e) => { e.stopPropagation(); onOpenProject(project.id); }} className="text-xs font-semibold text-blue-600 hover:text-blue-800">Open</button>
-                <button
-                  onClick={(e) => { e.stopPropagation(); handleToggleSpecial(project); }}
-                  className={isProjectSpecial(project) ? 'text-[#C9A961] hover:text-[#A88837]' : 'text-gray-400 hover:text-[#C9A961]'}
-                  title={isProjectSpecial(project) ? 'Remove from Special Projects' : 'Move to Special Projects'}
-                >
-                  <svg width="14" height="14" viewBox="0 0 16 16" fill={isProjectSpecial(project) ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"><path d="M8 1.5l1.9 4 4.4.5-3.2 3 .9 4.3L8 11.2 3.9 13.3l.9-4.3L1.6 6l4.4-.5L8 1.5z"/></svg>
-                </button>
                 <button onClick={(e) => { e.stopPropagation(); handleDuplicate(project); }} className="text-gray-400 hover:text-gray-600" title="Duplicate">
                   <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="5" y="1" width="10" height="10" rx="2" stroke="currentColor" strokeWidth="1.2"/><rect x="1" y="5" width="10" height="10" rx="2" stroke="currentColor" strokeWidth="1.2" fill="white"/></svg>
                 </button>
@@ -3970,7 +3924,6 @@
                 {[
                   { key: 'all', label: 'All', count: filtered.length },
                   { key: 'In Progress', label: 'In Progress', count: inProgressProjects.length },
-                  { key: 'Special Projects', label: 'Special Projects', count: specialProjects.length },
                   { key: 'Completed', label: 'Completed', count: completedProjects.length },
                 ].map(f => (
                   <button
@@ -3978,7 +3931,7 @@
                     onClick={() => setStatusFilter(f.key)}
                     className={`px-3 py-1.5 rounded-full text-xs font-semibold transition ${
                       statusFilter === f.key
-                        ? (f.key === 'Special Projects' ? 'bg-[#C9A961] text-white' : 'bg-gray-900 text-white')
+                        ? 'bg-gray-900 text-white'
                         : 'bg-white text-gray-500 border border-gray-300 hover:border-gray-400'
                     }`}
                   >
@@ -4031,17 +3984,7 @@
               <div className="mt-10">
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="text-lg font-bold text-gray-800 font-display">Checklist Overview</h3>
-                  <div className="flex items-center gap-3">
-                    <label className="flex items-center gap-1.5 text-xs font-semibold text-gray-600 cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        checked={includeSpecialInChecklist}
-                        onChange={(e) => setIncludeSpecialInChecklist(e.target.checked)}
-                        className="w-3.5 h-3.5 accent-[#C9A961] cursor-pointer"
-                      />
-                      Include Special Projects
-                    </label>
-                    <button onClick={() => {
+                  <button onClick={() => {
                     const mIds = ['skuCountAlignment','merchPassOff','merchFinalReview','linesheetCreation','allocReserve','depthReview','allocDrop','allocNetsuiteImport','finalAllocDrop','dcPackingStarts','linesheetFinal','truckBooking','dcDeparture','merchDelivery','openingDate'];
                     const mLabels = { skuCountAlignment:'SKU Count Alignment', merchPassOff:'Merch Pass Off', merchFinalReview:'Merch Final Review', linesheetCreation:'Linesheet Creation', allocReserve:'Allocation Reserve', depthReview:'Depth Review', allocDrop:'Allocation Drop Date', allocNetsuiteImport:'Alloc Netsuite Import', finalAllocDrop:'Final Allocation Drop', dcPackingStarts:'DC Packing Starts', truckBooking:'Truck Booking', dcDeparture:'DC Departure', linesheetFinal:'Linesheet Creation - FINAL', merchDelivery:'Merch Delivery Date', openingDate:'Opening Date' };
                     const td = new Date(); td.setHours(0,0,0,0);
@@ -4067,7 +4010,6 @@
                     XLSX.utils.book_append_sheet(wb, ws, 'All Checklists');
                     XLSX.writeFile(wb, 'NSO_Checklist_Overview.xlsx');
                   }} className="px-4 py-1.5 bg-green-600 text-white rounded-lg text-xs font-semibold hover:bg-green-700">Export Excel</button>
-                  </div>
                 </div>
                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-x-auto">
                   {(() => {
