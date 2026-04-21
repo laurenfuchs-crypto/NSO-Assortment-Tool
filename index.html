@@ -757,72 +757,6 @@
       }
     };
 
-    // Parse inventory/OH file for Special Projects (remodels)
-    // Accepts .xlsx or .csv; fuzzy-matches SKU, OH, Style, Description headers.
-    const parseInventory = (fileData) => {
-      const workbook = XLSX.read(fileData, { type: 'array' });
-      const sheetName = workbook.SheetNames[0];
-      const sheet = workbook.Sheets[sheetName];
-      const rawData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-
-      // Find the header row — look for SKU + (OH | On Hand | Qty) within the first 5 rows
-      let headerIdx = 0;
-      for (let i = 0; i < Math.min(5, rawData.length); i++) {
-        const row = rawData[i];
-        if (!Array.isArray(row)) continue;
-        const rowStr = row.map(c => String(c || '').toLowerCase()).join('|');
-        if (rowStr.includes('sku') && (rowStr.includes('oh') || rowStr.includes('on hand') || rowStr.includes('on-hand') || rowStr.includes('qty'))) {
-          headerIdx = i;
-          break;
-        }
-      }
-
-      const headers = (rawData[headerIdx] || []).map(h => String(h || '').trim());
-      const colMap = {};
-      headers.forEach((h, idx) => { if (h) colMap[h.toLowerCase()] = idx; });
-
-      const findCol = (synonyms) => {
-        for (const s of synonyms) {
-          const lower = s.toLowerCase();
-          if (colMap[lower] !== undefined) return colMap[lower];
-        }
-        // Partial match fallback
-        for (const s of synonyms) {
-          const lower = s.toLowerCase();
-          const key = Object.keys(colMap).find(k => k.includes(lower));
-          if (key !== undefined) return colMap[key];
-        }
-        return -1;
-      };
-
-      const cSKU = findCol(['sku']);
-      const cOH = findCol(['on-hand qty', 'on hand qty', 'on-hand', 'on hand', 'oh qty', 'oh', 'qty', 'quantity', 'units']);
-      const cStyle = findCol(['style number', 'style #', 'style']);
-      const cDesc = findCol(['style description', 'description', 'desc', 'name']);
-      const cPriceLevel = findCol(['price level', 'price status', 'markdown status', 'md status', 'pricing', 'price']);
-
-      if (cSKU < 0) throw new Error('SKU column not found in inventory file.');
-      if (cOH < 0) throw new Error('On-hand column not found. Expected a column named OH, On Hand, or Qty.');
-
-      const inventoryData = [];
-      for (let i = headerIdx + 1; i < rawData.length; i++) {
-        const row = rawData[i];
-        if (!Array.isArray(row)) continue;
-        const sku = String(row[cSKU] || '').trim();
-        if (!sku) continue;
-        const ohRaw = row[cOH];
-        const onHand = typeof ohRaw === 'number' ? ohRaw : Number(String(ohRaw || '').replace(/[^\d.-]/g, '')) || 0;
-        inventoryData.push({
-          sku,
-          onHand,
-          style: cStyle >= 0 ? String(row[cStyle] || '').trim() : '',
-          description: cDesc >= 0 ? String(row[cDesc] || '').trim() : '',
-          priceLevel: cPriceLevel >= 0 ? String(row[cPriceLevel] || '').trim() : '',
-        });
-      }
-      return inventoryData;
-    };
-
     // ============================================
     // STEP 1: STORE SETUP & FINANCIAL TOPLINE
     // ============================================
@@ -1616,36 +1550,6 @@
 
     const Step3 = ({ onNext, onPrev, onDataChange, data }) => {
       const fileInputRef = useRef(null);
-      const invFileInputRef = useRef(null);
-
-      const handleInventoryUpload = (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          try {
-            const parsed = parseInventory(new Uint8Array(event.target.result));
-            onDataChange({
-              ...data,
-              inventoryData: parsed,
-              inventoryFileName: file.name,
-              inventoryUploadedAt: new Date().toISOString(),
-            });
-          } catch (error) {
-            alert('Error parsing inventory file: ' + (error.message || error));
-          }
-        };
-        reader.readAsArrayBuffer(file);
-      };
-
-      const handleInventoryClear = () => {
-        if (!confirm('Clear the current inventory file? This will reset the Source tags and OH quantities in Step 4.')) return;
-        const next = { ...data };
-        delete next.inventoryData;
-        delete next.inventoryFileName;
-        delete next.inventoryUploadedAt;
-        onDataChange(next);
-      };
 
       const handleFileUpload = (e) => {
         const file = e.target.files[0];
@@ -1795,64 +1699,6 @@
       return (
         <div className="space-y-8">
           <h2 className="text-2xl font-bold text-gray-800">Step 3: Delivery Selection</h2>
-
-          {data.isSpecial && (
-            <div className="bg-[#fdf6e3] border-2 border-[#C9A961] rounded-lg p-5">
-              <div className="flex items-center gap-2 mb-3">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="#C9A961"><path d="M8 1.5l1.9 4 4.4.5-3.2 3 .9 4.3L8 11.2 3.9 13.3l.9-4.3L1.6 6l4.4-.5L8 1.5z"/></svg>
-                <h3 className="text-base font-bold text-gray-800">Current Inventory (Special Project)</h3>
-              </div>
-              <p className="text-sm text-gray-600 mb-4">
-                Upload the store's current on-hand inventory. SKUs from this file take priority over the PST when both exist, and new <strong className="font-semibold text-[#9a3412]">Extract</strong> actions become available in Step 4 for items being physically removed from the store.
-              </p>
-              {(data.inventoryData || []).length === 0 ? (
-                <div
-                  onClick={() => invFileInputRef.current?.click()}
-                  className="border-2 border-dashed border-[#C9A961] bg-white rounded-lg p-6 text-center cursor-pointer hover:bg-[#fcf0d6] transition"
-                >
-                  <input
-                    ref={invFileInputRef}
-                    type="file"
-                    accept=".xlsx,.xls,.csv"
-                    onChange={handleInventoryUpload}
-                    className="hidden"
-                  />
-                  <div className="text-base font-semibold text-gray-700">Upload current inventory (.xlsx or .csv)</div>
-                  <p className="text-xs text-gray-500 mt-2">Expected columns: SKU (required), OH / On Hand / Qty (required), Style, Description, Price Level (optional)</p>
-                </div>
-              ) : (
-                <div className="bg-white border border-[#C9A961] rounded-lg p-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2">
-                      <span className="px-2 py-0.5 bg-green-100 text-green-800 rounded text-xs font-semibold">✓ Loaded</span>
-                      <span className="text-sm font-semibold text-gray-700">{data.inventoryFileName || 'inventory.xlsx'}</span>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <button
-                        onClick={() => invFileInputRef.current?.click()}
-                        className="text-xs font-semibold text-[#C9A961] hover:text-[#A88837]"
-                      >↻ Replace file</button>
-                      <button
-                        onClick={handleInventoryClear}
-                        className="text-xs font-semibold text-gray-400 hover:text-red-600"
-                      >Clear</button>
-                    </div>
-                  </div>
-                  <input
-                    ref={invFileInputRef}
-                    type="file"
-                    accept=".xlsx,.xls,.csv"
-                    onChange={handleInventoryUpload}
-                    className="hidden"
-                  />
-                  <div className="flex gap-6 text-xs text-gray-600">
-                    <span><strong className="text-gray-900 font-semibold">{data.inventoryData.length.toLocaleString()}</strong> SKUs loaded</span>
-                    <span><strong className="text-gray-900 font-semibold">{data.inventoryData.reduce((sum, r) => sum + (r.onHand || 0), 0).toLocaleString()}</strong> total units on hand</span>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
 
           <div className="mb-8">
             <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer hover:border-gray-400 transition"
@@ -2010,7 +1856,6 @@
         storeTier: [],
         seasonalLifeCycle: [],
         mdExitWeek: [],
-        priceLevel: [],
         action: [],
         notes: [],
       });
@@ -2032,7 +1877,6 @@
       const [undoStack, setUndoStack] = useState([]);
 
       // Build base data (delivery month + store group match + manually added SKUs)
-      // For Special Projects with an inventory file: also merge in current on-hand SKUs.
       const baseData = useMemo(() => {
         const selectedDeliveries = data.selectedDeliveries || [];
         const selectedGroups = data.selectedGroups || [];
@@ -2060,83 +1904,11 @@
           }
         });
         const deduped = [...skuMap.values()];
-
-        // Special Projects: fold in current inventory SKUs with OH + source tagging
-        const isRemodel = !!data.isSpecial && (data.inventoryData || []).length > 0;
-        let withInventory = deduped.map(r => ({ ...r, source: 'pst', onHand: 0, defaultAction: 'Keep' }));
-        if (isRemodel) {
-          const invBySku = new Map();
-          (data.inventoryData || []).forEach(inv => {
-            if (inv.sku) invBySku.set(inv.sku, inv);
-          });
-          // Tag PST rows that are also in inventory
-          withInventory = withInventory.map(r => {
-            const inv = invBySku.get(r.sku);
-            if (inv) {
-              return { ...r, source: 'both', onHand: inv.onHand || 0, priceLevel: inv.priceLevel || '', defaultAction: 'Keep' };
-            }
-            return { ...r, source: 'pst', onHand: 0, priceLevel: '', defaultAction: 'Add' };
-          });
-          // Build a lookup of the FULL PST (all deliveries, all tiers) keyed by SKU —
-          // used to enrich inventory-only SKUs that exist in PST but under an unselected delivery.
-          const fullPstBySku = new Map();
-          (data.pstData || []).forEach(row => {
-            if (!row.sku) return;
-            if (fullPstBySku.has(row.sku)) {
-              const existing = fullPstBySku.get(row.sku);
-              const dm = String(row.deliveryMonth || '').trim();
-              if (dm && !existing.deliveryMonth.includes(dm)) {
-                existing.deliveryMonth = existing.deliveryMonth + ', ' + dm;
-              }
-            } else {
-              fullPstBySku.set(row.sku, { ...row, deliveryMonth: String(row.deliveryMonth || '').trim() });
-            }
-          });
-          // Add inventory-only SKUs (not in the selected PST slice). Enrich with full-PST metadata if available.
-          const pstSkus = new Set(withInventory.map(r => r.sku));
-          (data.inventoryData || []).forEach(inv => {
-            if (pstSkus.has(inv.sku)) return;
-            const pstMeta = fullPstBySku.get(inv.sku);
-            if (pstMeta) {
-              // SKU is in PST but under an unselected delivery — pull in all metadata.
-              withInventory.push({
-                ...pstMeta,
-                source: 'inventory',
-                onHand: inv.onHand || 0,
-                priceLevel: inv.priceLevel || '',
-                defaultAction: 'Extract',
-              });
-            } else {
-              // SKU isn't in PST at all — show whatever the OH file gave us.
-              withInventory.push({
-                sku: inv.sku,
-                style: inv.style || '',
-                styleDescription: inv.description || '',
-                colorDescription: '',
-                department: '',
-                category: '',
-                subcategory: '',
-                deliveryMonth: '',
-                storeTier: '',
-                seasonalLifeCycle: '',
-                mdExitWeek: '',
-                source: 'inventory',
-                onHand: inv.onHand || 0,
-                priceLevel: inv.priceLevel || '',
-                defaultAction: 'Extract',
-              });
-            }
-          });
-        }
-
         // Merge in manually added SKUs (avoid duplicates)
-        const allSkus = new Set(withInventory.map(r => r.sku));
-        const extras = addedSkus.filter(r => !allSkus.has(r.sku)).map(r => ({ ...r, source: 'pst', onHand: 0, defaultAction: 'Add' }));
-        return [...withInventory, ...extras];
-      }, [data.pstData, data.selectedDeliveries, data.selectedGroups, data.inventoryData, data.isSpecial, addedSkus]);
-
-      // Effective action for a row (user-set action wins; otherwise fall back to the row's default)
-      const getAction = (row) => skuActions[row.sku] || row.defaultAction || 'Keep';
+        const matchedSkus = new Set(deduped.map(r => r.sku));
+        const extras = addedSkus.filter(r => !matchedSkus.has(r.sku));
+        return [...deduped, ...extras];
+      }, [data.pstData, data.selectedDeliveries, data.selectedGroups, addedSkus]);
 
       const uniqueVals = useMemo(() => ({
         sku: [...new Set(baseData.map(r => r.sku).filter(Boolean))].sort(),
@@ -2149,7 +1921,6 @@
         storeTier: [...new Set(baseData.map(r => r.storeTier).filter(Boolean))].sort(),
         seasonalLifeCycle: [...new Set(baseData.map(r => r.seasonalLifeCycle).filter(Boolean))].sort(),
         mdExitWeek: [...new Set(baseData.map(r => r.mdExitWeek).filter(Boolean))].sort(),
-        priceLevel: [...new Set(baseData.map(r => r.priceLevel).filter(Boolean))].sort(),
         notes: [...new Set(baseData.map(r => skuNotes[r.sku]).filter(Boolean))].sort(),
       }), [baseData, skuNotes]);
 
@@ -2172,9 +1943,8 @@
           if (filters.storeTier.length && !filters.storeTier.includes(row.storeTier)) return false;
           if (filters.seasonalLifeCycle.length && !filters.seasonalLifeCycle.includes(row.seasonalLifeCycle)) return false;
           if (filters.mdExitWeek.length && !filters.mdExitWeek.includes(row.mdExitWeek)) return false;
-          if (filters.priceLevel.length && !filters.priceLevel.includes(row.priceLevel || '')) return false;
           if (filters.action.length) {
-            const act = getAction(row);
+            const act = skuActions[row.sku] || 'Keep';
             if (!filters.action.includes(act)) return false;
           }
           if (filters.notes.length) {
@@ -2209,15 +1979,14 @@
       }, [filteredData]);
 
       const summary = useMemo(() => {
-        let keeps = 0, drops = 0, adds = 0, extracts = 0;
+        let keeps = 0, drops = 0, adds = 0;
         filteredData.forEach(row => {
-          const action = getAction(row);
+          const action = skuActions[row.sku] || 'Keep';
           if (action === 'Keep') keeps++;
           else if (action === 'Drop') drops++;
           else if (action === 'Add') adds++;
-          else if (action === 'Extract') extracts++;
         });
-        return { total: filteredData.length, keeps, drops, adds, extracts, net: keeps + adds };
+        return { total: filteredData.length, keeps, drops, adds, net: keeps + adds };
       }, [skuActions, filteredData]);
 
       const handleRowSelect = (idx) => {
@@ -2318,9 +2087,8 @@
         let totalNet = 0;
         baseData.forEach(row => {
           const dept = row.department || 'Other';
-          const action = getAction(row);
-          // Keep + Add count toward net; Drop + Extract do not
-          if (action !== 'Drop' && action !== 'Extract') {
+          const action = skuActions[row.sku] || 'Keep';
+          if (action !== 'Drop') {
             counts[dept] = (counts[dept] || 0) + 1;
             totalNet++;
           }
@@ -2348,29 +2116,20 @@
       };
 
       const handleExport = () => {
-        const isRemodel = !!data.isSpecial && (data.inventoryData || []).length > 0;
-        const exportData = sortedData.map(row => {
-          const base = {
-            SKU: row.sku,
-            Division: row.department,
-            Category: row.category,
-            Subcategory: row.subcategory,
-            'Style Description': row.styleDescription,
-            'Color Description': row.colorDescription,
-            'Seasonal LC': row.seasonalLifeCycle,
-            'Delivery Month': row.deliveryMonth,
-            'Store Tier': row.storeTier,
-            'MD Exit Week': row.mdExitWeek,
-            Action: getAction(row),
-            Notes: skuNotes[row.sku] || '',
-          };
-          if (isRemodel) {
-            base.Source = row.source === 'both' ? 'Both' : row.source === 'inventory' ? 'Inventory only' : 'PST only';
-            base['On Hand'] = row.onHand || 0;
-            base['Price Level'] = row.priceLevel || '';
-          }
-          return base;
-        });
+        const exportData = sortedData.map(row => ({
+          SKU: row.sku,
+          Division: row.department,
+          Category: row.category,
+          Subcategory: row.subcategory,
+          'Style Description': row.styleDescription,
+          'Color Description': row.colorDescription,
+          'Seasonal LC': row.seasonalLifeCycle,
+          'Delivery Month': row.deliveryMonth,
+          'Store Tier': row.storeTier,
+          'MD Exit Week': row.mdExitWeek,
+          Action: skuActions[row.sku] || 'Keep',
+          Notes: skuNotes[row.sku] || '',
+        }));
         const ws = XLSX.utils.json_to_sheet(exportData);
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, 'Assortment Review');
@@ -2451,13 +2210,12 @@
         const counts = {};
         filteredData.forEach(row => {
           const dept = row.department || 'Other';
-          if (!counts[dept]) counts[dept] = { total: 0, keeps: 0, drops: 0, adds: 0, extracts: 0 };
+          if (!counts[dept]) counts[dept] = { total: 0, keeps: 0, drops: 0, adds: 0 };
           counts[dept].total++;
-          const action = getAction(row);
+          const action = skuActions[row.sku] || 'Keep';
           if (action === 'Keep') counts[dept].keeps++;
           else if (action === 'Drop') counts[dept].drops++;
           else if (action === 'Add') counts[dept].adds++;
-          else if (action === 'Extract') counts[dept].extracts++;
         });
         return counts;
       }, [filteredData, skuActions]);
@@ -2539,14 +2297,10 @@
                 </tbody>
               </table>
             </div>
-            <div className="mt-3 flex gap-4 text-xs text-gray-500 flex-wrap">
+            <div className="mt-3 flex gap-4 text-xs text-gray-500">
               <span>Total SKUs in assortment: <strong className="text-gray-800">{summary.total}</strong></span>
               <span>Keeps: <strong className="text-green-600">{summary.keeps}</strong></span>
-              <span>Adds: <strong className="text-blue-600">{summary.adds}</strong></span>
               <span>Drops: <strong className="text-red-600">{summary.drops}</strong></span>
-              {data.isSpecial && (data.inventoryData || []).length > 0 && (
-                <span>Extracts: <strong className="text-[#9a3412]">{summary.extracts}</strong></span>
-              )}
               <span>Net: <strong className="text-purple-600">{summary.net}</strong></span>
             </div>
           </div>
@@ -2669,7 +2423,7 @@
                               <td className="px-2 py-1">{r.storeTier}</td>
                               <td className="px-2 py-1">
                                 {inAssortment ? (
-                                  <span className={`font-semibold ${currentAction === 'Drop' ? 'text-red-500' : currentAction === 'Add' ? 'text-green-600' : currentAction === 'Extract' ? 'text-[#9a3412]' : 'text-gray-500'}`}>{currentAction}</span>
+                                  <span className={`font-semibold ${currentAction === 'Drop' ? 'text-red-500' : currentAction === 'Add' ? 'text-green-600' : 'text-gray-500'}`}>{currentAction}</span>
                                 ) : (
                                   <span className="text-gray-400">Not in list</span>
                                 )}
@@ -2692,9 +2446,6 @@
               <button onClick={() => handleBulkAction('Keep')} disabled={selectedRows.size === 0} className="px-3 py-1.5 bg-green-600 text-white rounded text-xs font-semibold hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed">Keep ({selectedRows.size})</button>
               <button onClick={() => handleBulkAction('Drop')} disabled={selectedRows.size === 0} className="px-3 py-1.5 bg-red-600 text-white rounded text-xs font-semibold hover:bg-red-700 disabled:bg-gray-300 disabled:cursor-not-allowed">Drop ({selectedRows.size})</button>
               <button onClick={() => handleBulkAction('Add')} disabled={selectedRows.size === 0} className="px-3 py-1.5 bg-blue-600 text-white rounded text-xs font-semibold hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed">Add ({selectedRows.size})</button>
-              {data.isSpecial && (data.inventoryData || []).length > 0 && (
-                <button onClick={() => handleBulkAction('Extract')} disabled={selectedRows.size === 0} className="px-3 py-1.5 bg-[#b45309] text-white rounded text-xs font-semibold hover:bg-[#92400e] disabled:bg-gray-300 disabled:cursor-not-allowed">Extract ({selectedRows.size})</button>
-              )}
               <button onClick={handleUndo} disabled={undoStack.length === 0} className="px-3 py-1.5 bg-gray-100 text-gray-600 rounded text-xs font-semibold hover:bg-gray-200 disabled:bg-gray-50 disabled:text-gray-300 disabled:cursor-not-allowed">↩ Undo</button>
               <div className="flex-1" />
               <label className="px-3 py-1.5 bg-blue-100 text-blue-700 rounded text-xs font-semibold hover:bg-blue-200 cursor-pointer">
@@ -2718,13 +2469,6 @@
                   <tr className="bg-gray-100 border-b border-gray-300">
                     <th className="px-1 py-1.5 text-left" style={{width:'30px'}}><input type="checkbox" onChange={(e) => { e.target.checked ? setSelectedRows(new Set(paginatedData.map((_, i) => i))) : setSelectedRows(new Set()); }} className="w-3.5 h-3.5" /></th>
                     <th className="px-1 py-1.5 text-left text-xs font-bold">SKU</th>
-                    {data.isSpecial && (data.inventoryData || []).length > 0 && (
-                      <React.Fragment>
-                        <th className="px-1 py-1.5 text-left text-xs font-bold">Source</th>
-                        <th className="px-1 py-1.5 text-right text-xs font-bold">OH</th>
-                        <th className="px-1 py-1.5 text-left text-xs font-bold">Price Level</th>
-                      </React.Fragment>
-                    )}
                     <th className="px-1 py-1.5 text-left text-xs font-bold">Division</th>
                     <th className="px-1 py-1.5 text-left text-xs font-bold">Category</th>
                     <th className="px-1 py-1.5 text-left text-xs font-bold">Subcategory</th>
@@ -2741,13 +2485,6 @@
                   <tr className="bg-gray-50 border-b-2 border-gray-300">
                     <th className="px-1 py-1"></th>
                     <th className="px-1 py-1"><MultiSelectFilter options={uniqueVals.sku} selected={filters.sku} onChange={(v) => setFilter('sku', v)} /></th>
-                    {data.isSpecial && (data.inventoryData || []).length > 0 && (
-                      <React.Fragment>
-                        <th className="px-1 py-1"></th>
-                        <th className="px-1 py-1"></th>
-                        <th className="px-1 py-1"><MultiSelectFilter options={uniqueVals.priceLevel} selected={filters.priceLevel} onChange={(v) => setFilter('priceLevel', v)} /></th>
-                      </React.Fragment>
-                    )}
                     <th className="px-1 py-1"><MultiSelectFilter options={uniqueVals.department} selected={filters.department} onChange={(v) => setFilter('department', v)} /></th>
                     <th className="px-1 py-1"><MultiSelectFilter options={uniqueVals.category} selected={filters.category} onChange={(v) => setFilter('category', v)} /></th>
                     <th className="px-1 py-1"><MultiSelectFilter options={uniqueVals.subcategory} selected={filters.subcategory} onChange={(v) => setFilter('subcategory', v)} /></th>
@@ -2757,43 +2494,18 @@
                     <th className="px-1 py-1"><MultiSelectFilter options={uniqueVals.deliveryMonth} selected={filters.deliveryMonth} onChange={(v) => setFilter('deliveryMonth', v)} /></th>
                     <th className="px-1 py-1"><MultiSelectFilter options={uniqueVals.storeTier} selected={filters.storeTier} onChange={(v) => setFilter('storeTier', v)} /></th>
                     <th className="px-1 py-1"><MultiSelectFilter options={uniqueVals.mdExitWeek} selected={filters.mdExitWeek} onChange={(v) => setFilter('mdExitWeek', v)} /></th>
-                    <th className="px-1 py-1"><MultiSelectFilter options={data.isSpecial && (data.inventoryData || []).length > 0 ? ['Keep', 'Drop', 'Add', 'Extract'] : ['Keep', 'Drop', 'Add']} selected={filters.action} onChange={(v) => setFilter('action', v)} /></th>
+                    <th className="px-1 py-1"><MultiSelectFilter options={['Keep', 'Drop', 'Add']} selected={filters.action} onChange={(v) => setFilter('action', v)} /></th>
                     <th className="px-1 py-1"><MultiSelectFilter options={uniqueVals.notes} selected={filters.notes} onChange={(v) => setFilter('notes', v)} /></th>
                   </tr>
                 </thead>
                 <tbody>
                   {paginatedData.map((row, idx) => {
-                    const action = getAction(row);
-                    const bgColor = action === 'Drop' ? 'bg-red-50'
-                      : action === 'Add' ? 'bg-green-50'
-                      : action === 'Extract' ? 'bg-amber-50'
-                      : idx % 2 === 0 ? 'bg-white' : 'bg-gray-50';
-                    const showInv = data.isSpecial && (data.inventoryData || []).length > 0;
-                    const sourceLabel = row.source === 'both' ? 'Both' : row.source === 'inventory' ? 'Inv only' : 'PST only';
-                    const sourcePillClass = row.source === 'both'
-                      ? 'bg-green-100 text-green-800'
-                      : row.source === 'inventory'
-                        ? 'bg-amber-100 text-amber-800'
-                        : 'bg-blue-100 text-blue-800';
+                    const action = skuActions[row.sku] || 'Keep';
+                    const bgColor = action === 'Drop' ? 'bg-red-50' : action === 'Add' ? 'bg-green-50' : idx % 2 === 0 ? 'bg-white' : 'bg-gray-50';
                     return (
                       <tr key={idx} className={`${bgColor} border-b border-gray-200`}>
                         <td className="px-2 py-1.5"><input type="checkbox" checked={selectedRows.has(idx)} onChange={() => handleRowSelect(idx)} className="w-3.5 h-3.5" /></td>
                         <td className="px-2 py-1.5 text-xs font-mono">{row.sku}</td>
-                        {showInv && (
-                          <React.Fragment>
-                            <td className="px-2 py-1.5 text-xs">
-                              <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold whitespace-nowrap ${sourcePillClass}`}>{sourceLabel}</span>
-                            </td>
-                            <td className="px-2 py-1.5 text-xs text-right font-mono">{row.onHand > 0 ? row.onHand : <span className="text-gray-300">—</span>}</td>
-                            <td className="px-2 py-1.5 text-xs">
-                              {row.priceLevel ? (
-                                <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold whitespace-nowrap ${/markdown|\bmd\b|sale|clearance/i.test(row.priceLevel) ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-700'}`}>{row.priceLevel}</span>
-                              ) : (
-                                <span className="text-gray-300">—</span>
-                              )}
-                            </td>
-                          </React.Fragment>
-                        )}
                         <td className="px-2 py-1.5 text-xs">{row.department}</td>
                         <td className="px-2 py-1.5 text-xs">{row.category}</td>
                         <td className="px-2 py-1.5 text-xs">{row.subcategory}</td>
@@ -2803,14 +2515,7 @@
                         <td className="px-2 py-1.5 text-xs">{row.deliveryMonth}</td>
                         <td className="px-2 py-1.5 text-xs">{row.storeTier}</td>
                         <td className="px-2 py-1.5 text-xs">{row.mdExitWeek}</td>
-                        <td className="px-2 py-1.5">
-                          <select value={action} onChange={(e) => handleActionChange(row.sku, e.target.value)} className="px-1 py-0.5 border border-gray-300 rounded text-xs">
-                            <option value="Keep">Keep</option>
-                            <option value="Drop">Drop</option>
-                            <option value="Add">Add</option>
-                            {showInv && <option value="Extract">Extract</option>}
-                          </select>
-                        </td>
+                        <td className="px-2 py-1.5"><select value={action} onChange={(e) => handleActionChange(row.sku, e.target.value)} className="px-1 py-0.5 border border-gray-300 rounded text-xs"><option value="Keep">Keep</option><option value="Drop">Drop</option><option value="Add">Add</option></select></td>
                         <td className="px-2 py-1.5"><input type="text" value={skuNotes[row.sku] || ''} onChange={(e) => handleNoteChange(row.sku, e.target.value)} placeholder="Notes..." className="w-full px-1 py-0.5 border border-gray-300 rounded text-xs" /></td>
                       </tr>
                     );
@@ -2987,7 +2692,7 @@
 
         filteredData.forEach(row => {
           const action = skuActions[row.sku] || 'Keep';
-          if (action === 'Drop' || action === 'Extract') return;
+          if (action === 'Drop') return;
           if (seenSkus.has(row.sku)) return;
           seenSkus.add(row.sku);
           const dept = normalizeDept(row.department || 'Other');
@@ -3156,7 +2861,7 @@
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => {
-                    const skus = filteredData.filter(r => { const a = data.skuActions?.[r.sku] || 'Keep'; return a !== 'Drop' && a !== 'Extract'; }).map(r => r.sku);
+                    const skus = filteredData.filter(r => (data.skuActions?.[r.sku] || 'Keep') !== 'Drop').map(r => r.sku);
                     const seen = new Set();
                     const uniqueSkus = skus.filter(s => { if (seen.has(s)) return false; seen.add(s); return true; });
                     const ws = XLSX.utils.aoa_to_sheet([['SKU', 'Ideal Allocation', 'Reserved Units'], ...uniqueSkus.map(s => [s, '', ''])]);
@@ -3797,19 +3502,139 @@
     // ============================================
 
     const SUPABASE_URL = 'https://nsusxfwoprirxkvaueyf.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5zdXN4ZndvcHJpcnhrdmF1ZXlmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQzNTU3MzQsImV4cCI6MjA4OTkzMTczNH0.VHvO23T-YsGQYb9sinsydNPs8e9xR_nzMwOlpiR7Qrk';
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5zdXN4ZndvcHJpcnhrdmF1ZXlmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQzNTU3MzQsImV4cCI6MjA4OTkzMTczNH0.VHvO23T-YsGQYb9sinsydNPs8e9xR_nzMwOlpiR7Qrk';
     const CACHE_KEY = 'faherty_nso_cache';
+    const SESSION_KEY = 'faherty_nso_session';
+    const ALLOWED_EMAIL_DOMAIN = 'fahertybrand.com';
 
-    const supaFetch = (path, opts = {}) => fetch(SUPABASE_URL + '/rest/v1/' + path, {
-      ...opts,
-      headers: {
-        'apikey': SUPABASE_KEY,
-        'Authorization': 'Bearer ' + SUPABASE_KEY,
-        'Content-Type': 'application/json',
-        'Cache-Control': 'no-cache',
-        ...(opts.headers || {}),
-      },
+    // ============================================
+    // AUTH (Supabase magic link)
+    // ============================================
+    const getSession = () => {
+      try {
+        const raw = localStorage.getItem(SESSION_KEY);
+        if (!raw) return null;
+        const s = JSON.parse(raw);
+        if (!s || !s.access_token || !s.refresh_token) return null;
+        return s;
+      } catch { return null; }
+    };
+    const saveSession = (s) => { localStorage.setItem(SESSION_KEY, JSON.stringify(s)); };
+    const clearSession = () => { localStorage.removeItem(SESSION_KEY); };
+
+    const sessionFromTokenResponse = (data) => ({
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+      // refresh 60s before actual expiry for safety
+      expires_at: Date.now() + ((data.expires_in || 3600) * 1000) - 60000,
+      email: (data.user && data.user.email) || null,
     });
+
+    // Parse #access_token=... from magic-link redirect
+    const consumeMagicLinkHash = () => {
+      if (!window.location.hash || window.location.hash.indexOf('access_token=') === -1) return null;
+      const params = new URLSearchParams(window.location.hash.substring(1));
+      const access_token = params.get('access_token');
+      const refresh_token = params.get('refresh_token');
+      const expires_in = parseInt(params.get('expires_in') || '3600', 10);
+      if (!access_token || !refresh_token) return null;
+      // Scrub tokens from URL/history
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+      return { access_token, refresh_token, expires_at: Date.now() + expires_in * 1000 - 60000, email: null };
+    };
+
+    const sendMagicLink = async (email) => {
+      const redirectTo = window.location.origin + window.location.pathname;
+      const res = await fetch(SUPABASE_URL + '/auth/v1/otp', {
+        method: 'POST',
+        headers: { 'apikey': SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, create_user: true, options: { email_redirect_to: redirectTo } }),
+      });
+      if (!res.ok) {
+        let msg = 'Could not send magic link.';
+        try { const e = await res.json(); msg = e.msg || e.error_description || e.message || msg; } catch {}
+        throw new Error(msg);
+      }
+      return true;
+    };
+
+    const refreshSession = async (session) => {
+      try {
+        const res = await fetch(SUPABASE_URL + '/auth/v1/token?grant_type=refresh_token', {
+          method: 'POST',
+          headers: { 'apikey': SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refresh_token: session.refresh_token }),
+        });
+        if (!res.ok) { clearSession(); return null; }
+        const data = await res.json();
+        const next = sessionFromTokenResponse(data);
+        if (!next.email && session.email) next.email = session.email;
+        saveSession(next);
+        return next;
+      } catch (e) { return null; }
+    };
+
+    const fetchAuthUser = async (accessToken) => {
+      try {
+        const res = await fetch(SUPABASE_URL + '/auth/v1/user', {
+          headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': 'Bearer ' + accessToken },
+        });
+        if (!res.ok) return null;
+        return await res.json();
+      } catch { return null; }
+    };
+
+    const signOutAndReload = async () => {
+      const s = getSession();
+      if (s) {
+        try {
+          await fetch(SUPABASE_URL + '/auth/v1/logout', {
+            method: 'POST',
+            headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': 'Bearer ' + s.access_token },
+          });
+        } catch {}
+      }
+      clearSession();
+      localStorage.removeItem('faherty_nso_username');
+      window.location.reload();
+    };
+
+    // Deduplicate concurrent refresh attempts
+    let _refreshInFlight = null;
+    const getValidSession = async () => {
+      const s = getSession();
+      if (!s) return null;
+      if (Date.now() < s.expires_at) return s;
+      if (!_refreshInFlight) {
+        _refreshInFlight = refreshSession(s).finally(() => { _refreshInFlight = null; });
+      }
+      return await _refreshInFlight;
+    };
+
+    const isAllowedEmail = (email) => {
+      if (!email) return false;
+      return email.toLowerCase().endsWith('@' + ALLOWED_EMAIL_DOMAIN);
+    };
+
+    // supaFetch now requires a valid user session and uses the user's JWT
+    const supaFetch = async (path, opts = {}) => {
+      const session = await getValidSession();
+      if (!session) {
+        window.dispatchEvent(new CustomEvent('faherty-auth-required'));
+        // Return a fake failing Response so existing .ok checks short-circuit cleanly
+        return new Response(null, { status: 401, statusText: 'Not authenticated' });
+      }
+      return fetch(SUPABASE_URL + '/rest/v1/' + path, {
+        ...opts,
+        headers: {
+          'apikey': SUPABASE_ANON_KEY,
+          'Authorization': 'Bearer ' + session.access_token,
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache',
+          ...(opts.headers || {}),
+        },
+      });
+    };
 
     // Dashboard cache: only stores id, storeName, status, dates (NO appData — too big)
     const loadDashboardCache = () => {
@@ -3819,8 +3644,6 @@
       try {
         const slim = projects.map(p => ({
           id: p.id, storeName: p.storeName, status: p.status,
-          isSpecial: !!p.isSpecial,
-          notes: p.notes || '',
           createdAt: p.createdAt, updatedAt: p.updatedAt,
         }));
         localStorage.setItem(CACHE_KEY, JSON.stringify(slim));
@@ -3841,12 +3664,8 @@
           if (!res.ok) return null;
         }
         const rows = await res.json();
-        const existingCache = loadDashboardCache();
-        const cacheMap = Object.fromEntries(existingCache.map(p => [p.id, p]));
         const projects = rows.map(r => ({
           id: r.id, storeName: r.store_name || '', status: r.status || '',
-          isSpecial: !!cacheMap[r.id]?.isSpecial,
-          notes: cacheMap[r.id]?.notes || '',
           createdAt: r.created_at || '', updatedAt: r.updated_at || r.created_at || '',
         }));
         saveDashboardCache(projects);
@@ -3879,7 +3698,7 @@
       // Update dashboard cache (slim — no appData)
       let cache = loadDashboardCache();
       const idx = cache.findIndex(p => p.id === projectId);
-      const cacheEntry = { id: projectId, storeName, status, isSpecial: !!appData.isSpecial, notes: appData.notes || '', createdAt: idx >= 0 ? (cache[idx].createdAt || now) : now, updatedAt: now };
+      const cacheEntry = { id: projectId, storeName, status, createdAt: idx >= 0 ? (cache[idx].createdAt || now) : now, updatedAt: now };
       if (idx >= 0) { cache[idx] = cacheEntry; } else { cache.push(cacheEntry); }
       saveDashboardCache(cache);
 
@@ -3898,7 +3717,7 @@
         }
       } catch (e) { console.error('Save error:', e); }
 
-      return { id: projectId, storeName, status, isSpecial: !!appData.isSpecial, notes: appData.notes || '', createdAt: cacheEntry.createdAt, updatedAt: now, appData };
+      return { id: projectId, storeName, status, createdAt: cacheEntry.createdAt, updatedAt: now, appData };
     };
 
     // Delete project
@@ -3960,9 +3779,6 @@
       const [confirmDelete, setConfirmDelete] = useState(null);
       const [syncing, setSyncing] = useState(false);
       const [statusFilter, setStatusFilter] = useState('all');
-      const [includeSpecialInChecklist, setIncludeSpecialInChecklist] = useState(false);
-      const [editingNotesId, setEditingNotesId] = useState(null);
-      const [editNotesValue, setEditNotesValue] = useState('');
 
       const doSync = async () => {
         setSyncing(true);
@@ -3978,16 +3794,6 @@
               if (r.status === 'fulfilled' && r.value) map[r.value.id] = r.value;
             });
             setFullProjects(map);
-            // Sync isSpecial from full data into slim cache (authoritative source = appData)
-            setProjects(prev => {
-              const updated = prev.map(p => ({
-                ...p,
-                isSpecial: !!map[p.id]?.appData?.isSpecial,
-                notes: map[p.id]?.appData?.notes || p.notes || '',
-              }));
-              saveDashboardCache(updated);
-              return updated;
-            });
           }
         } catch (e) { console.error('doSync error:', e); }
         setSyncing(false);
@@ -4012,18 +3818,8 @@
         if (parts.length === 3) { let [m,d,y] = parts.map(Number); if(y<100)y+=y<50?2000:1900; return new Date(y,m-1,d); }
         return null;
       };
-      const isProjectSpecial = (project) => {
-        const fp = fullProjects[project.id];
-        // Prefer authoritative value from loaded appData; fall back to slim cache
-        return fp?.appData?.isSpecial ?? project.isSpecial ?? false;
-      };
-      const getNotes = (project) => {
-        const fp = fullProjects[project.id];
-        return fp?.appData?.notes ?? project.notes ?? '';
-      };
       const activeProjects = useMemo(() => {
         return filtered.filter(p => { const d = parseOpenDate(p); return !d || d >= today; })
-          .filter(p => includeSpecialInChecklist || !isProjectSpecial(p))
           .sort((a, b) => {
             const da = parseOpenDate(a);
             const db = parseOpenDate(b);
@@ -4032,7 +3828,7 @@
             if (!db) return -1;
             return da - db;
           });
-      }, [filtered, fullProjects, includeSpecialInChecklist]);
+      }, [filtered, fullProjects]);
 
       const handleDelete = (id) => {
         deleteProject(id);
@@ -4049,51 +3845,6 @@
         dupData.divisionSignoffs = {};
         saveProject(newId, dupData);
         doSync();
-      };
-
-      const handleToggleSpecial = async (project) => {
-        let appData = fullProjects[project.id]?.appData;
-        if (!appData) {
-          const full = await remoteLoadProject(project.id);
-          appData = full?.appData;
-          if (!appData) { alert('Could not load project data'); return; }
-        }
-        const newAppData = { ...appData, isSpecial: !appData.isSpecial };
-        // Optimistic UI update
-        setFullProjects(prev => ({
-          ...prev,
-          [project.id]: { ...(prev[project.id] || {}), appData: newAppData },
-        }));
-        setProjects(prev => prev.map(p => p.id === project.id ? { ...p, isSpecial: newAppData.isSpecial } : p));
-        // Persist to Supabase + slim cache
-        await saveProject(project.id, newAppData);
-      };
-
-      const handleSaveNotes = async (projectId) => {
-        const trimmed = editNotesValue.trim();
-        let appData = fullProjects[projectId]?.appData;
-        if (!appData) {
-          const full = await remoteLoadProject(projectId);
-          appData = full?.appData;
-          if (!appData) { setEditingNotesId(null); return; }
-        }
-        const currentNotes = appData.notes || '';
-        if (currentNotes === trimmed) {
-          // No change — just close the editor
-          setEditingNotesId(null);
-          setEditNotesValue('');
-          return;
-        }
-        const newAppData = { ...appData, notes: trimmed };
-        // Optimistic UI update
-        setFullProjects(prev => ({
-          ...prev,
-          [projectId]: { ...(prev[projectId] || {}), appData: newAppData },
-        }));
-        setProjects(prev => prev.map(p => p.id === projectId ? { ...p, notes: trimmed } : p));
-        setEditingNotesId(null);
-        setEditNotesValue('');
-        await saveProject(projectId, newAppData);
       };
 
       const statusColor = (status) => {
@@ -4131,7 +3882,6 @@
       const checklistMilestoneIds = ['skuCountAlignment','merchPassOff','merchFinalReview','linesheetCreation','allocReserve','depthReview','allocDrop','allocNetsuiteImport','finalAllocDrop','dcPackingStarts','linesheetFinal','truckBooking','dcDeparture','merchDelivery','openingDate'];
 
       const getProjectCategory = (project) => {
-        if (isProjectSpecial(project)) return 'Special Projects';
         const openDate = parseOpenDate(project);
         if (!openDate || openDate >= today) return 'In Progress';
         const fp = fullProjects[project.id];
@@ -4174,16 +3924,14 @@
       };
       const inProgressProjects = useMemo(() => filtered.filter(p => getProjectCategory(p) === 'In Progress').sort(sortByOpenDate), [filtered, fullProjects]);
       const completedProjects = useMemo(() => filtered.filter(p => getProjectCategory(p) === 'Completed').sort(sortByOpenDate), [filtered, fullProjects]);
-      const specialProjects = useMemo(() => filtered.filter(p => getProjectCategory(p) === 'Special Projects').sort(sortByOpenDate), [filtered, fullProjects]);
 
       const categoryConfig = {
         'In Progress': { color: 'green', dotClass: 'bg-green-600', borderClass: 'border-green-600', barColor: 'bg-green-600', projects: inProgressProjects },
-        'Special Projects': { color: 'gold', dotClass: 'bg-[#C9A961]', borderClass: 'border-[#C9A961]', barColor: 'bg-[#C9A961]', projects: specialProjects },
         'Completed': { color: 'gray', dotClass: 'bg-gray-400', borderClass: 'border-gray-400', barColor: 'bg-gray-400', projects: completedProjects },
       };
 
       const visibleCategories = statusFilter === 'all'
-        ? ['In Progress', 'Special Projects', 'Completed']
+        ? ['In Progress', 'Completed']
         : [statusFilter];
 
       const renderProjectRow = (project, catColor) => {
@@ -4195,58 +3943,10 @@
         return (
           <div key={project.id} className={`bg-white rounded-lg border border-gray-200 hover:border-gray-400 transition cursor-pointer ${isCompleted ? 'opacity-70' : ''}`}>
             <div className="flex items-center px-4 py-3">
-              <div className="flex-1 min-w-0 group">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-sm font-semibold text-gray-900 truncate" onClick={() => onOpenProject(project.id)}>
-                    {project.storeName || 'Unnamed Store'}
-                  </span>
-                  <span className="text-xs text-gray-400 whitespace-nowrap flex-shrink-0" onClick={() => onOpenProject(project.id)}>Step {step}/7</span>
-                  {editingNotesId === project.id ? (
-                    <React.Fragment>
-                      <span className="text-gray-300 text-xs flex-shrink-0">·</span>
-                      <input
-                        autoFocus
-                        type="text"
-                        value={editNotesValue}
-                        onChange={(e) => setEditNotesValue(e.target.value)}
-                        onClick={(e) => e.stopPropagation()}
-                        onBlur={() => handleSaveNotes(project.id)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
-                          if (e.key === 'Escape') { setEditingNotesId(null); setEditNotesValue(''); }
-                        }}
-                        placeholder="Add a note..."
-                        className="text-[13px] text-gray-700 italic flex-1 min-w-0 border-b border-[#C9A961] outline-none bg-transparent placeholder:text-gray-300 placeholder:not-italic"
-                      />
-                    </React.Fragment>
-                  ) : getNotes(project) ? (
-                    <React.Fragment>
-                      <span className="text-gray-300 text-xs flex-shrink-0">·</span>
-                      <span
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setEditingNotesId(project.id);
-                          setEditNotesValue(getNotes(project) || '');
-                        }}
-                        className="text-[13px] italic text-gray-600 truncate cursor-text hover:text-[#C9A961] min-w-0"
-                        title="Click to edit note"
-                      >
-                        {getNotes(project)}
-                      </span>
-                    </React.Fragment>
-                  ) : (
-                    <span
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setEditingNotesId(project.id);
-                        setEditNotesValue('');
-                      }}
-                      className="text-[13px] text-gray-300 cursor-text hover:text-[#C9A961] opacity-0 group-hover:opacity-100 transition whitespace-nowrap flex-shrink-0"
-                      title="Add a note"
-                    >
-                      + Add note
-                    </span>
-                  )}
+              <div className="flex-1 min-w-0" onClick={() => onOpenProject(project.id)}>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-semibold text-gray-900 truncate">{project.storeName || 'Unnamed Store'}</span>
+                  <span className="text-xs text-gray-400">Step {step}/7</span>
                 </div>
               </div>
               <div className="text-xs text-gray-500 w-24 text-center flex-shrink-0">{openDateStr}</div>
@@ -4273,13 +3973,6 @@
               </div>
               <div className="flex items-center gap-3 ml-3 flex-shrink-0">
                 <button onClick={(e) => { e.stopPropagation(); onOpenProject(project.id); }} className="text-xs font-semibold text-blue-600 hover:text-blue-800">Open</button>
-                <button
-                  onClick={(e) => { e.stopPropagation(); handleToggleSpecial(project); }}
-                  className={isProjectSpecial(project) ? 'text-[#C9A961] hover:text-[#A88837]' : 'text-gray-400 hover:text-[#C9A961]'}
-                  title={isProjectSpecial(project) ? 'Remove from Special Projects' : 'Move to Special Projects'}
-                >
-                  <svg width="14" height="14" viewBox="0 0 16 16" fill={isProjectSpecial(project) ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"><path d="M8 1.5l1.9 4 4.4.5-3.2 3 .9 4.3L8 11.2 3.9 13.3l.9-4.3L1.6 6l4.4-.5L8 1.5z"/></svg>
-                </button>
                 <button onClick={(e) => { e.stopPropagation(); handleDuplicate(project); }} className="text-gray-400 hover:text-gray-600" title="Duplicate">
                   <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="5" y="1" width="10" height="10" rx="2" stroke="currentColor" strokeWidth="1.2"/><rect x="1" y="5" width="10" height="10" rx="2" stroke="currentColor" strokeWidth="1.2" fill="white"/></svg>
                 </button>
@@ -4351,7 +4044,6 @@
                 {[
                   { key: 'all', label: 'All', count: filtered.length },
                   { key: 'In Progress', label: 'In Progress', count: inProgressProjects.length },
-                  { key: 'Special Projects', label: 'Special Projects', count: specialProjects.length },
                   { key: 'Completed', label: 'Completed', count: completedProjects.length },
                 ].map(f => (
                   <button
@@ -4359,7 +4051,7 @@
                     onClick={() => setStatusFilter(f.key)}
                     className={`px-3 py-1.5 rounded-full text-xs font-semibold transition ${
                       statusFilter === f.key
-                        ? (f.key === 'Special Projects' ? 'bg-[#C9A961] text-white' : 'bg-gray-900 text-white')
+                        ? 'bg-gray-900 text-white'
                         : 'bg-white text-gray-500 border border-gray-300 hover:border-gray-400'
                     }`}
                   >
@@ -4412,17 +4104,7 @@
               <div className="mt-10">
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="text-lg font-bold text-gray-800 font-display">Checklist Overview</h3>
-                  <div className="flex items-center gap-3">
-                    <label className="flex items-center gap-1.5 text-xs font-semibold text-gray-600 cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        checked={includeSpecialInChecklist}
-                        onChange={(e) => setIncludeSpecialInChecklist(e.target.checked)}
-                        className="w-3.5 h-3.5 accent-[#C9A961] cursor-pointer"
-                      />
-                      Include Special Projects
-                    </label>
-                    <button onClick={() => {
+                  <button onClick={() => {
                     const mIds = ['skuCountAlignment','merchPassOff','merchFinalReview','linesheetCreation','allocReserve','depthReview','allocDrop','allocNetsuiteImport','finalAllocDrop','dcPackingStarts','linesheetFinal','truckBooking','dcDeparture','merchDelivery','openingDate'];
                     const mLabels = { skuCountAlignment:'SKU Count Alignment', merchPassOff:'Merch Pass Off', merchFinalReview:'Merch Final Review', linesheetCreation:'Linesheet Creation', allocReserve:'Allocation Reserve', depthReview:'Depth Review', allocDrop:'Allocation Drop Date', allocNetsuiteImport:'Alloc Netsuite Import', finalAllocDrop:'Final Allocation Drop', dcPackingStarts:'DC Packing Starts', truckBooking:'Truck Booking', dcDeparture:'DC Departure', linesheetFinal:'Linesheet Creation - FINAL', merchDelivery:'Merch Delivery Date', openingDate:'Opening Date' };
                     const td = new Date(); td.setHours(0,0,0,0);
@@ -4448,7 +4130,6 @@
                     XLSX.utils.book_append_sheet(wb, ws, 'All Checklists');
                     XLSX.writeFile(wb, 'NSO_Checklist_Overview.xlsx');
                   }} className="px-4 py-1.5 bg-green-600 text-white rounded-lg text-xs font-semibold hover:bg-green-700">Export Excel</button>
-                  </div>
                 </div>
                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-x-auto">
                   {(() => {
@@ -4572,37 +4253,20 @@
       const activeProjectRef = useRef(null);
       const saveTimerRef = useRef(null);
 
-      // Get or ask for user name
+      // Get user name — now always the authenticated email (AuthGate seeds localStorage)
       const getUserName = () => {
-        let name = userName || localStorage.getItem('faherty_nso_username') || '';
-        if (!name) {
-          name = prompt('Enter your name (for edit tracking):');
-          if (name) {
-            name = name.trim();
-            localStorage.setItem('faherty_nso_username', name);
-            setUserName(name);
-          }
-        }
+        const name = userName || localStorage.getItem('faherty_nso_username') || '';
+        if (name && name !== userName) setUserName(name);
         return name;
       };
 
-      // Acquire lock when opening a project (store in Supabase via project metadata)
+      // Acquire lock when opening a project (local-only for now)
       const acquireLock = async (projectId) => {
-        if (!userName) {
-          const name = prompt('Enter your name (for edit tracking):');
-          if (name) { localStorage.setItem('faherty_nso_username', name.trim()); setUserName(name.trim()); }
-          else return false;
-        }
+        const currentUser = userName || localStorage.getItem('faherty_nso_username');
+        if (!currentUser) return false;
         try {
           const currentUser = userName || localStorage.getItem('faherty_nso_username');
-          await fetch(SUPABASE_URL + '/rest/v1/projects?id=eq.' + projectId, {
-            method: 'PATCH',
-            headers: supaHeaders,
-            body: JSON.stringify({ app_data: undefined }), // we'll use a separate approach
-          });
-          // Store lock info alongside the project — lightweight approach
-          // We'll check locks via a convention: project row gets a lock_ prefix field
-          // For now, just track locally and check on open
+          // Lock is tracked locally only (cross-user locking is a Phase 2 feature)
           localStorage.setItem('faherty_lock_' + projectId, JSON.stringify({ userName: currentUser, timestamp: new Date().toISOString() }));
           return true;
         } catch(e) { return true; }
@@ -4874,7 +4538,163 @@
       );
     };
 
-    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    // ============================================
+    // LOGIN SCREEN
+    // ============================================
+    const LoginScreen = () => {
+      const [email, setEmail] = useState('');
+      const [status, setStatus] = useState('idle'); // idle | sending | sent | error
+      const [errorMsg, setErrorMsg] = useState('');
+
+      const handleSubmit = async () => {
+        const trimmed = email.trim().toLowerCase();
+        if (!trimmed) { setErrorMsg('Please enter your email.'); setStatus('error'); return; }
+        if (!isAllowedEmail(trimmed)) {
+          setErrorMsg('Only @' + ALLOWED_EMAIL_DOMAIN + ' emails can access this tool.');
+          setStatus('error'); return;
+        }
+        setStatus('sending'); setErrorMsg('');
+        try {
+          await sendMagicLink(trimmed);
+          setStatus('sent');
+        } catch (e) {
+          setErrorMsg(e.message || 'Could not send magic link. Please try again.');
+          setStatus('error');
+        }
+      };
+
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-[#FAF9F5] p-6">
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8 max-w-md w-full">
+            <h1 className="font-display text-3xl text-[#1C3554] mb-1">Faherty NSO Assortment Tool</h1>
+            <div className="h-px bg-[#C9B99A] w-12 mb-5" />
+            {status !== 'sent' ? (
+              <>
+                <p className="text-sm text-gray-600 mb-6">Sign in with your Faherty email to continue.</p>
+                <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">Email</label>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={e => { setEmail(e.target.value); if (status === 'error') { setStatus('idle'); setErrorMsg(''); } }}
+                  onKeyDown={e => { if (e.key === 'Enter') handleSubmit(); }}
+                  placeholder={'name@' + ALLOWED_EMAIL_DOMAIN}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md mb-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#1C3554] focus:border-transparent"
+                  autoFocus
+                  disabled={status === 'sending'}
+                />
+                {errorMsg && <p className="text-xs text-red-600 mb-3">{errorMsg}</p>}
+                <button
+                  onClick={handleSubmit}
+                  disabled={status === 'sending'}
+                  className="w-full px-4 py-2 bg-[#1C3554] text-white rounded-md font-semibold text-sm hover:bg-[#162B44] disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {status === 'sending' ? 'Sending…' : 'Send magic link'}
+                </button>
+                <p className="text-xs text-gray-400 mt-4 text-center">No password. We'll email you a sign-in link.</p>
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-gray-700 mb-2 font-semibold">Check your inbox.</p>
+                <p className="text-xs text-gray-600 mb-4 leading-relaxed">
+                  We sent a sign-in link to <strong className="text-[#1C3554]">{email}</strong>. Click the link in the email to continue. You can close this tab — the link will open a new one.
+                </p>
+                <button
+                  onClick={() => { setStatus('idle'); setEmail(''); setErrorMsg(''); }}
+                  className="text-xs text-[#1C3554] underline hover:no-underline"
+                >
+                  Use a different email
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      );
+    };
+
+    // ============================================
+    // AUTH GATE (bootstraps session, gates the app)
+    // ============================================
+    const AuthGate = () => {
+      const [session, setSession] = useState(null);
+      const [loading, setLoading] = useState(true);
+      const [rejectedEmail, setRejectedEmail] = useState('');
+
+      useEffect(() => {
+        let cancelled = false;
+        const bootstrap = async () => {
+          // Step 1: pull tokens from magic-link redirect if present
+          const fromHash = consumeMagicLinkHash();
+          if (fromHash) saveSession(fromHash);
+
+          // Step 2: get current session, refresh if expired
+          let s = getSession();
+          if (s && Date.now() >= s.expires_at) {
+            s = await refreshSession(s);
+          }
+
+          // Step 3: verify user / email domain
+          if (s) {
+            if (!s.email) {
+              const user = await fetchAuthUser(s.access_token);
+              if (user && user.email) {
+                s.email = user.email;
+                saveSession(s);
+              }
+            }
+            if (!isAllowedEmail(s.email)) {
+              const bad = s.email || '';
+              clearSession();
+              s = null;
+              if (bad) { if (!cancelled) setRejectedEmail(bad); }
+            } else {
+              // Seed userName for existing edit-tracking code
+              localStorage.setItem('faherty_nso_username', s.email);
+            }
+          }
+
+          if (!cancelled) { setSession(s); setLoading(false); }
+        };
+        bootstrap();
+
+        const onAuthRequired = () => { clearSession(); setSession(null); };
+        window.addEventListener('faherty-auth-required', onAuthRequired);
+        return () => { cancelled = true; window.removeEventListener('faherty-auth-required', onAuthRequired); };
+      }, []);
+
+      if (loading) {
+        return (
+          <div className="min-h-screen flex items-center justify-center bg-[#FAF9F5]">
+            <p className="text-sm text-gray-500">Loading…</p>
+          </div>
+        );
+      }
+
+      if (!session) {
+        return (
+          <>
+            {rejectedEmail && (
+              <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-red-50 border border-red-200 text-red-700 text-xs px-4 py-2 rounded shadow-sm">
+                <strong>{rejectedEmail}</strong> is not a Faherty email. You've been signed out.
+              </div>
+            )}
+            <LoginScreen />
+          </>
+        );
+      }
+
+      return (
+        <>
+          <div style={{position: 'fixed', top: 8, right: 12, zIndex: 50}} className="text-xs text-gray-500 bg-white/90 backdrop-blur-sm px-3 py-1 rounded-full border border-gray-200 shadow-sm">
+            <span className="hidden sm:inline">Signed in as </span><span className="text-[#1C3554] font-semibold">{session.email}</span>
+            <span className="mx-2 text-gray-300">·</span>
+            <button onClick={signOutAndReload} className="text-[#1C3554] underline hover:no-underline">Sign out</button>
+          </div>
+          <App />
+        </>
+      );
+    };
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<AuthGate />);
   </script>
 </body>
 </html>
