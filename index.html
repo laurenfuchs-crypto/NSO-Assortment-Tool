@@ -499,6 +499,148 @@
           totalRollup: [],
         };
 
+        // ============================================================
+        // FORMAT DETECTION
+        // The new "Store Grid" format is a single sheet with all data:
+        //   - Columns: Store Name | Region | Area | Vibe | # Groups | <group columns with X marks>
+        //   - Includes "Mens Tier 1/2/2+/3/3+/4/4+" and "Womens Tier 1/2/2+/..." columns
+        //   - No tier data for Non Apparel or Kids
+        // The old "Store Tiering Tool" format had separate sheets per division.
+        // ============================================================
+        const detectNewFormat = () => {
+          for (const sheetName of workbook.SheetNames) {
+            const sheet = workbook.Sheets[sheetName];
+            const firstRow = XLSX.utils.sheet_to_json(sheet, { header: 1, range: 0 })[0];
+            if (!Array.isArray(firstRow)) continue;
+            const headerLower = firstRow.map(c => String(c || '').toLowerCase().trim());
+            // New-format signature: "store name" + at least one mens/womens tier column
+            const hasStoreName = headerLower.some(h => h === 'store name' || h === 'store');
+            const hasMensTier = headerLower.some(h => /^mens tier \d/.test(h));
+            const hasWomensTier = headerLower.some(h => /^womens tier \d/.test(h));
+            if (hasStoreName && (hasMensTier || hasWomensTier)) {
+              return sheetName;
+            }
+          }
+          return null;
+        };
+
+        const newFormatSheetName = detectNewFormat();
+
+        if (newFormatSheetName) {
+          // ============================================================
+          // NEW FORMAT: Single-sheet Store Grid
+          // ============================================================
+          const sheet = workbook.Sheets[newFormatSheetName];
+          const rawData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+          if (rawData.length === 0) return result;
+
+          const headers = rawData[0].map(h => String(h || '').trim());
+          const headerLower = headers.map(h => h.toLowerCase());
+
+          // Locate key columns
+          const findCol = (predicate) => headerLower.findIndex(predicate);
+          const storeCol = findCol(h => h === 'store name' || h === 'store' || h === 'location' || h === 'location name');
+          const regionCol = findCol(h => h === 'region');
+          const areaCol = findCol(h => h === 'area');
+          const vibeCol = findCol(h => h === 'vibe');
+
+          // Mens & Womens tier columns: capture all tier columns (with or without "+")
+          // We'll derive each store's tier as the HIGHEST tier marked X.
+          // Rationale: "Tier 4+" with X means "tier 4 or higher" — if a store
+          // has 2+, 3+, 4+ marked but no plain tier, it's a Tier 4 store.
+          const mensTierCols = [];
+          const womensTierCols = [];
+          headers.forEach((h, i) => {
+            const lh = h.toLowerCase();
+            // Match "mens tier N" with optional "+"
+            const mMatch = lh.match(/^mens tier (\d)\+?$/);
+            const wMatch = lh.match(/^womens tier (\d)\+?$/);
+            if (mMatch) mensTierCols.push({ tier: mMatch[1], col: i });
+            if (wMatch) womensTierCols.push({ tier: wMatch[1], col: i });
+          });
+          // Sort descending so the first X-marked column wins (highest tier)
+          mensTierCols.sort((a, b) => Number(b.tier) - Number(a.tier));
+          womensTierCols.sort((a, b) => Number(b.tier) - Number(a.tier));
+
+          // Group columns = everything that isn't store metadata
+          // We treat ALL X-mark columns as available groups (including tier columns,
+          // since "Mens Tier 3+" etc. are themselves valid group selections in the matrix)
+          const metadataCols = new Set([storeCol, regionCol, areaCol, vibeCol].filter(c => c >= 0));
+          // Also exclude "# Groups" type columns (numeric counts, not X marks)
+          headers.forEach((h, i) => {
+            const lh = h.toLowerCase();
+            if (lh === '# groups' || lh === 'groups' || lh === 'group count') metadataCols.add(i);
+          });
+
+          const groupNames = [];
+          const groupCols = [];
+          headers.forEach((h, i) => {
+            if (!h || metadataCols.has(i)) return;
+            groupNames.push(h);
+            groupCols.push(i);
+          });
+          result.storeGroups = groupNames;
+
+          const isX = (v) => v != null && String(v).trim().toUpperCase() === 'X';
+
+          // Walk store rows
+          for (let i = 1; i < rawData.length; i++) {
+            const row = rawData[i];
+            if (!Array.isArray(row)) continue;
+            const storeNameRaw = storeCol >= 0 ? row[storeCol] : row[0];
+            if (!storeNameRaw) continue;
+            const storeName = String(storeNameRaw).trim();
+            if (!storeName) continue;
+            // Skip total/summary rows
+            const slow = storeName.toLowerCase();
+            if (slow === 'total' || slow.startsWith('total ') || slow.includes('median') || slow.includes('grand total')) continue;
+
+            result.allStores.push(storeName);
+
+            // Build the groups list for storeMatrix
+            const groups = [];
+            groupCols.forEach((col, idx) => {
+              if (isX(row[col])) groups.push(groupNames[idx]);
+            });
+            result.storeMatrix[storeName] = groups;
+
+            // Derive Mens tier: lowest-numbered non-"+" tier marked X
+            let mensTier = '';
+            for (const t of mensTierCols) {
+              if (isX(row[t.col])) { mensTier = t.tier; break; }
+            }
+            // Derive Womens tier: same approach
+            let womensTier = '';
+            for (const t of womensTierCols) {
+              if (isX(row[t.col])) { womensTier = t.tier; break; }
+            }
+
+            // Build division row objects in a shape compatible with the existing
+            // downstream consumers (which look for "Store" and a "Proposed Tier"
+            // or "Override Tier" column via case-insensitive substring matching).
+            const baseRow = {
+              'Store': storeName,
+              'Region': regionCol >= 0 ? (row[regionCol] || '') : '',
+              'Area': areaCol >= 0 ? (row[areaCol] || '') : '',
+              'Vibe': vibeCol >= 0 ? (row[vibeCol] || '') : '',
+            };
+            if (mensTier) {
+              result.mensData.push({ ...baseRow, 'Proposed Tier': mensTier });
+            }
+            if (womensTier) {
+              result.womensData.push({ ...baseRow, 'Proposed Tier': womensTier });
+            }
+            // Per requirement 1A: leave Non Apparel and Kids tier data empty in the
+            // new format (the new Store Grid does not provide tiers for them).
+          }
+
+          return result;
+        }
+
+        // ============================================================
+        // OLD FORMAT: Multi-sheet Store Tiering Tool
+        // ============================================================
+
         // Parse Attributes Upload
         if (workbook.SheetNames.includes('Attributes Upload')) {
           const sheet = workbook.Sheets['Attributes Upload'];
